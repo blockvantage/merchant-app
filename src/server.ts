@@ -6,6 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { App } from './app.js'; // App class will be refactored
 import { AlchemyService } from './services/alchemyService.js';
+import { SUPPORTED_CHAINS, ChainConfig } from './config/index.js';
 
 // Resolve __dirname for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -81,12 +82,13 @@ export function broadcast(message: object) {
 type AsyncRequestHandler = (req: Request, res: Response, next?: NextFunction) => Promise<void | Response>;
 
 // Function to monitor transaction for a payment
-async function monitorTransaction(merchantAddress: string, amount: number) {
+async function monitorTransaction(merchantAddress: string, amount: number, chainId: number = 1, chainName: string = "Ethereum") {
     console.log(`🔍 Starting transaction monitoring for ${merchantAddress}, amount: $${amount}`);
+    console.log(`💰 Waiting for payment of $${amount} USD (${amount} wei minimum) on ${chainName} (Chain ID: ${chainId})`);
     
     const startTime = Date.now();
     const timeout = setTimeout(() => {
-        console.log(`⏰ Payment timeout for ${merchantAddress}`);
+        console.log(`⏰ Payment timeout for ${merchantAddress} - No payment of $${amount} received after 5 minutes on ${chainName}`);
         broadcast({ type: 'payment_failure', message: 'Payment timeout - no transaction detected', errorType: 'PAYMENT_TIMEOUT' });
         activePayments.delete(merchantAddress);
     }, 300000); // 5 minutes timeout
@@ -99,26 +101,55 @@ async function monitorTransaction(merchantAddress: string, amount: number) {
     });
 
     try {
-        // Start monitoring transactions to the merchant address
-        const unsubscribe = await AlchemyService.monitorTransactions(merchantAddress, async (tx) => {
-            console.log(`📝 Transaction detected for ${merchantAddress}:`, tx);
-            
-            // Verify transaction amount matches expected amount
-            if (tx.value >= amount) {
-                console.log(`✅ Payment confirmed for ${merchantAddress}`);
-                clearTimeout(timeout);
-                activePayments.delete(merchantAddress);
-                broadcast({ type: 'transaction_confirmed', message: 'Payment confirmed!' });
-            }
-        });
+        // Start monitoring transactions to the merchant address on the specific chain
+        const unsubscribe = await AlchemyService.monitorTransactions(
+            merchantAddress, 
+            async (tx) => {
+                console.log(`📝 Transaction detected for ${merchantAddress} on ${chainName}:`, {
+                    hash: tx.hash,
+                    value: tx.value,
+                    valueETH: tx.value / 1e18,
+                    valueUSD: (tx.value / 1e18) * 3400, // Rough ETH price for display
+                    from: tx.from,
+                    to: tx.to,
+                    chainId,
+                    chainName
+                });
+                
+                // Verify transaction amount matches expected amount
+                if (tx.value >= amount) {
+                    console.log(`✅ Payment confirmed! Received ${tx.value / 1e18} ETH (≥ $${amount} wei required) for ${merchantAddress} on ${chainName}`);
+                    clearTimeout(timeout);
+                    activePayments.delete(merchantAddress);
+                    broadcast({ 
+                        type: 'transaction_confirmed', 
+                        message: `Payment confirmed on ${chainName}!`,
+                        transactionHash: tx.hash,
+                        amount: tx.value,
+                        chainName,
+                        chainId
+                    });
+                } else {
+                    console.log(`⚠️ Transaction amount too small: ${tx.value / 1e18} ETH (${tx.value} wei) < ${amount} wei required on ${chainName}`);
+                }
+            }, 
+            chainId,
+            amount // Pass minimum amount as wei
+        );
 
+        console.log(`🎯 Transaction monitoring active for ${chainName} (Chain ID: ${chainId})`);
+        
         // Store unsubscribe function for cleanup
         return unsubscribe;
     } catch (error) {
-        console.error('Error setting up transaction monitoring:', error);
+        console.error(`Error setting up transaction monitoring on ${chainName}:`, error);
         clearTimeout(timeout);
         activePayments.delete(merchantAddress);
-        broadcast({ type: 'payment_failure', message: 'Failed to monitor transaction', errorType: 'MONITORING_ERROR' });
+        broadcast({ 
+            type: 'payment_failure', 
+            message: `Failed to monitor transaction on ${chainName}: ${error instanceof Error ? error.message : 'Unknown error'}`, 
+            errorType: 'MONITORING_ERROR' 
+        });
         throw error;
     }
 }
@@ -141,14 +172,74 @@ const initiatePaymentHandler: AsyncRequestHandler = async (req, res) => {
     broadcast({ type: 'status', message: `Preparing for $${amount.toFixed(2)} payment...` });
 
     try {
-        // Start transaction monitoring
-        await monitorTransaction(merchantAddress, amount);
-        
         // This method in App will trigger NFCService.armForPaymentAndAwaitTap
         const paymentResult = await nfcApp.processPayment(amount);
         
-        if (paymentResult.success) {
+        if (paymentResult.success && paymentResult.paymentInfo) {
+            console.log(`✅ Payment request sent successfully: ${paymentResult.message}`);
+            console.log(`⛓️ Payment sent on: ${paymentResult.paymentInfo.chainName} (Chain ID: ${paymentResult.paymentInfo.chainId})`);
+            
+            // Start transaction monitoring for the specific chain the payment was sent on
+            try {
+                await monitorTransaction(
+                    merchantAddress, 
+                    amount, 
+                    paymentResult.paymentInfo.chainId, 
+                    paymentResult.paymentInfo.chainName
+                );
+                console.log(`🔍 Monitoring started for ${paymentResult.paymentInfo.chainName} payment of $${amount.toFixed(2)}`);
+                broadcast({ 
+                    type: 'monitoring_started', 
+                    message: `Monitoring ${paymentResult.paymentInfo.chainName} for payment...`,
+                    chainName: paymentResult.paymentInfo.chainName,
+                    chainId: paymentResult.paymentInfo.chainId
+                });
+            } catch (monitoringError) {
+                console.error(`❌ Failed to start monitoring on ${paymentResult.paymentInfo.chainName}:`, monitoringError);
+                
+                // Fallback: try to monitor on Ethereum mainnet
+                console.log(`🔄 Falling back to Ethereum mainnet monitoring...`);
+                try {
+                    await monitorTransaction(merchantAddress, amount, 1, "Ethereum (fallback)");
+                    broadcast({ 
+                        type: 'status', 
+                        message: `Payment sent on ${paymentResult.paymentInfo.chainName}. Monitoring Ethereum mainnet as fallback.`,
+                        isWarning: true
+                    });
+                } catch (fallbackError) {
+                    console.error(`❌ Fallback monitoring also failed:`, fallbackError);
+                    broadcast({ 
+                        type: 'payment_failure', 
+                        message: 'Payment sent but monitoring failed. Please verify manually.', 
+                        errorType: 'MONITORING_ERROR' 
+                    });
+                }
+            }
+            
+            broadcast({ type: 'payment_success', message: paymentResult.message, amount });
+            res.json({ success: true, message: paymentResult.message });
+        } else if (paymentResult.success) {
+            // Fallback to Ethereum monitoring if no payment info
             console.log(`✅ Payment successful: ${paymentResult.message}`);
+            console.log(`🔄 No chain information available, defaulting to Ethereum monitoring`);
+            
+            try {
+                await monitorTransaction(merchantAddress, amount, 1, "Ethereum (default)");
+                broadcast({ 
+                    type: 'monitoring_started', 
+                    message: 'Monitoring Ethereum for payment...',
+                    chainName: "Ethereum",
+                    chainId: 1
+                });
+            } catch (monitoringError) {
+                console.error(`❌ Failed to start Ethereum monitoring:`, monitoringError);
+                broadcast({ 
+                    type: 'payment_failure', 
+                    message: 'Payment sent but monitoring failed. Please verify manually.', 
+                    errorType: 'MONITORING_ERROR' 
+                });
+            }
+            
             broadcast({ type: 'payment_success', message: paymentResult.message, amount });
             res.json({ success: true, message: paymentResult.message });
         } else {
@@ -167,6 +258,25 @@ const initiatePaymentHandler: AsyncRequestHandler = async (req, res) => {
 
 // HTTP endpoint to initiate payment
 expressApp.post('/initiate-payment', initiatePaymentHandler);
+
+// Debug endpoint to check supported chains and active subscriptions
+expressApp.get('/debug/chains', (req, res) => {
+    const supportedChains = SUPPORTED_CHAINS.map(chain => ({
+        id: chain.id,
+        name: chain.name,
+        displayName: chain.displayName,
+        nativeToken: chain.nativeToken
+    }));
+    
+    const activeSubscriptions = AlchemyService.getActiveSubscriptions();
+    
+    res.json({
+        supportedChains,
+        activeSubscriptions,
+        totalChains: supportedChains.length,
+        totalSubscriptions: activeSubscriptions.length
+    });
+});
 
 // Add global error handlers
 process.on('uncaughtException', (error) => {
@@ -218,6 +328,13 @@ function shutdown(signal: string) {
         clearTimeout(session.timeout);
     });
     activePayments.clear();
+    
+    // Cleanup all active Alchemy subscriptions
+    try {
+        AlchemyService.cleanup();
+    } catch (error) {
+        console.error('Error cleaning up Alchemy subscriptions:', error);
+    }
     
     // Close WebSocket clients first
     wss.clients.forEach(client => {

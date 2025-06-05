@@ -126,7 +126,12 @@ export class PaymentService {
   /**
    * Calculate payment options and send payment request
    */
-  static async calculateAndSendPayment(tokensWithPrices: TokenWithPrice[], reader: Reader, targetUSD: number): Promise<void> {
+  static async calculateAndSendPayment(tokensWithPrices: TokenWithPrice[], reader: Reader, targetUSD: number): Promise<{
+    selectedToken: TokenWithPrice;
+    requiredAmount: number;
+    chainId: number;
+    chainName: string;
+  }> {
     // Filter tokens that have sufficient balance for targetUSD payment
     const viableTokens = tokensWithPrices.filter(token => 
       token.priceUSD > 0 && token.valueUSD >= targetUSD
@@ -134,7 +139,7 @@ export class PaymentService {
 
     if (viableTokens.length === 0) {
       console.log(`\n❌ No tokens found with sufficient balance for $${targetUSD} payment`);
-      return;
+      throw new Error(`No tokens found with sufficient balance for $${targetUSD} payment`);
     }
 
     console.log(`\n💰 PAYMENT OPTIONS ($${targetUSD}):`);
@@ -163,9 +168,18 @@ export class PaymentService {
     const requiredAmount = targetUSD / selectedToken.priceUSD;
     
     console.log(`\n🎯 Selected: ${requiredAmount.toFixed(6)} ${selectedToken.symbol} (${selectedToken.chainDisplayName})`);
+    console.log(`⛓️ Payment will be monitored on: ${selectedToken.chainDisplayName} (Chain ID: ${selectedToken.chainId})`);
     
     // Send payment request with proper decimals and chain ID using NDEF formatting
     await this.sendPaymentRequest(reader, requiredAmount.toFixed(6), selectedToken.address, selectedToken.decimals, selectedToken.chainId);
+    
+    // Return information needed for monitoring
+    return {
+      selectedToken,
+      requiredAmount,
+      chainId: selectedToken.chainId,
+      chainName: selectedToken.chainDisplayName
+    };
   }
 
   /**

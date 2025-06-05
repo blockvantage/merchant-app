@@ -82,6 +82,32 @@ export const SUPPORTED_CHAINS: ChainConfig[] = [
       decimals: 18
     },
     coingeckoId: 'ethereum'
+  },
+  {
+    id: 137,
+    name: 'polygon',
+    displayName: 'Polygon',
+    alchemyNetwork: 'polygon-mainnet',
+    alchemyUrl: `https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`,
+    nativeToken: {
+      symbol: 'MATIC',
+      name: 'Polygon',
+      decimals: 18
+    },
+    coingeckoId: 'matic-network'
+  },
+  {
+    id: 393402133025423,
+    name: 'starknet',
+    displayName: 'Starknet',
+    alchemyNetwork: 'starknet-mainnet',
+    alchemyUrl: `https://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_6/${ALCHEMY_API_KEY}`,
+    nativeToken: {
+      symbol: 'ETH',
+      name: 'Ethereum',
+      decimals: 18
+    },
+    coingeckoId: 'ethereum'
   }
 ];
 
@@ -97,7 +123,9 @@ export const COINGECKO_PLATFORMS: {[chainName: string]: string} = {
   'ethereum': 'ethereum',
   'base': 'base',
   'arbitrum': 'arbitrum-one', 
-  'optimism': 'optimistic-ethereum'
+  'optimism': 'optimistic-ethereum',
+  'polygon': 'polygon-pos',
+  'starknet': 'starknet'
 };
 
 export const config = {

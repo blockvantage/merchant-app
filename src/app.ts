@@ -27,7 +27,7 @@ export class App {
    * @param amount The amount to charge in USD.
    * @returns Promise resolving with payment result.
    */
-  async processPayment(amount: number): Promise<{ success: boolean; message: string; errorType?: string }> {
+  async processPayment(amount: number): Promise<{ success: boolean; message: string; errorType?: string; paymentInfo?: any }> {
     if (!this.nfcService) {
         console.error('NFC Service not initialized in App!');
         return { success: false, message: 'NFC Service not ready', errorType: 'NFC_SERVICE_ERROR' };

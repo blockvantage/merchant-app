@@ -14,8 +14,8 @@ export class NFCService {
   private nfc: NFC;
   private paymentArmed: boolean = false;
   private currentPaymentAmount: number | null = null;
-  private cardHandlerPromise: Promise<{ success: boolean; message: string; errorType?: string }> | null = null;
-  private cardHandlerResolve: ((result: { success: boolean; message: string; errorType?: string }) => void) | null = null;
+  private cardHandlerPromise: Promise<{ success: boolean; message: string; errorType?: string; paymentInfo?: any }> | null = null;
+  private cardHandlerResolve: ((result: { success: boolean; message: string; errorType?: string; paymentInfo?: any }) => void) | null = null;
 
   constructor() {
     this.nfc = new NFC();
@@ -124,13 +124,17 @@ export class NFCService {
         const portfolio = await AlchemyService.fetchMultiChainBalances(ethAddress);
         
         // Calculate and send payment request using all tokens across all chains
-        await PaymentService.calculateAndSendPayment(portfolio.allTokens, reader, amount);
+        const paymentInfo = await PaymentService.calculateAndSendPayment(portfolio.allTokens, reader, amount);
         
         // Update UI to show waiting for payment
         broadcast({ type: 'status', message: 'Waiting for payment...' });
         
         if (this.cardHandlerResolve) {
-          this.cardHandlerResolve({ success: true, message: `Payment request for $${amount.toFixed(2)} sent to ${ethAddress}` });
+          this.cardHandlerResolve({ 
+            success: true, 
+            message: `Payment request for $${amount.toFixed(2)} sent to ${ethAddress}`,
+            paymentInfo
+          });
           this.cardHandlerResolve = null;
         }
         
@@ -164,7 +168,7 @@ export class NFCService {
   /**
    * Arm the service for payment and wait for a card tap
    */
-  public async armForPaymentAndAwaitTap(amount: number): Promise<{ success: boolean; message: string; errorType?: string }> {
+  public async armForPaymentAndAwaitTap(amount: number): Promise<{ success: boolean; message: string; errorType?: string; paymentInfo?: any }> {
     this.paymentArmed = true;
     this.currentPaymentAmount = amount;
     console.log(`💰 NFCService: Armed for payment of $${amount.toFixed(2)}. Waiting for tap...`);
@@ -212,4 +216,4 @@ export class NFCService {
     console.log('🔴 NFCService: Stopping listeners...');
     // Add any cleanup logic here if needed
   }
-} 
+}
