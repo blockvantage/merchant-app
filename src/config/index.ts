@@ -6,7 +6,7 @@ export const GET = Buffer.from('80CA000000', 'hex'); // "GET_STRING" APDU
 export const PAYMENT = Buffer.from('80CF000000', 'hex'); // "PAYMENT" APDU
 
 // Recipient address for payments (replace with your actual receiving address)
-export const RECIPIENT_ADDRESS = '0x109F7f0bFE98E4d1352916056FDcd90b9547ba00';
+export const RECIPIENT_ADDRESS = '0xad66946538e4b03b1910dade713febb8b59cff60';
 
 // Processing configuration
 export const COOLDOWN_DURATION = 5000; // 30 seconds cooldown after processing

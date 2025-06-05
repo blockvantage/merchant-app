@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NFC Payment Terminal</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            -khtml-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            padding: 20px;
+            max-width: 100%;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 20px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 300;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .display-section {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        .amount-display {
+            text-align: center;
+            font-size: 4rem;
+            font-weight: bold;
+            color: #333;
+            min-height: 80px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 3px dashed #ddd;
+            border-radius: 15px;
+            background: #f8f9fa;
+        }
+
+        .amount-display.has-value {
+            border-color: #28a745;
+            background: #f8fff9;
+            color: #28a745;
+        }
+
+        .keypad {
+            flex: 1;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            grid-template-rows: repeat(4, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .key {
+            background: rgba(255, 255, 255, 0.9);
+            border: none;
+            border-radius: 15px;
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #333;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 80px;
+        }
+
+        .key:hover {
+            background: rgba(255, 255, 255, 1);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+        }
+
+        .key:active {
+            transform: translateY(0);
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
+        }
+
+        .key.clear {
+            background: rgba(220, 53, 69, 0.9);
+            color: white;
+            font-size: 1.8rem;
+        }
+
+        .key.clear:hover {
+            background: rgba(220, 53, 69, 1);
+        }
+
+        .key.decimal {
+            background: rgba(108, 117, 125, 0.9);
+            color: white;
+        }
+
+        .key.decimal:hover {
+            background: rgba(108, 117, 125, 1);
+        }
+
+        .done-button {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+            border: none;
+            border-radius: 20px;
+            font-size: 2rem;
+            font-weight: bold;
+            padding: 25px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 30px rgba(40, 167, 69, 0.3);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .done-button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 40px rgba(40, 167, 69, 0.4);
+        }
+
+        .done-button:active {
+            transform: translateY(-1px);
+        }
+
+        .done-button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        /* NFC Status Screen */
+        .nfc-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            color: white;
+            text-align: center;
+            padding: 40px;
+        }
+
+        .nfc-screen.error {
+            background: linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%);
+        }
+
+        .nfc-icon {
+            font-size: 8rem;
+            margin-bottom: 30px;
+            animation: pulse 2s infinite;
+        }
+
+        .nfc-message {
+            font-size: 2.5rem;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+
+        .nfc-submessage {
+            font-size: 1.5rem;
+            opacity: 0.9;
+            margin-bottom: 40px;
+        }
+
+        .nfc-amount {
+            font-size: 3rem;
+            font-weight: bold;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 20px 40px;
+            border-radius: 15px;
+            margin-bottom: 30px;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.1); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .loading-dots {
+            display: inline-block;
+        }
+
+        .loading-dots::after {
+            content: '';
+            animation: dots 1.5s infinite;
+        }
+
+        @keyframes dots {
+            0%, 20% { content: ''; }
+            40% { content: '.'; }
+            60% { content: '..'; }
+            80%, 100% { content: '...'; }
+        }
+
+        .retry-button {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 2px solid white;
+            border-radius: 15px;
+            font-size: 1.5rem;
+            padding: 15px 30px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .retry-button:hover {
+            background: white;
+            color: #333;
+        }
+
+        /* Success Screen */
+        .success-screen {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        }
+
+        .success-icon {
+            font-size: 8rem;
+            margin-bottom: 30px;
+        }
+
+        /* Responsive adjustments for 5" screen */
+        @media (max-width: 600px) and (max-height: 400px) {
+            .container { padding: 15px; }
+            .header h1 { font-size: 2rem; }
+            .header p { font-size: 1rem; }
+            .amount-display { font-size: 3rem; min-height: 60px; }
+            .key { font-size: 2rem; min-height: 60px; }
+            .done-button { font-size: 1.5rem; padding: 20px; }
+            .nfc-message { font-size: 2rem; }
+            .nfc-amount { font-size: 2.5rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>💳 Payment Terminal</h1>
+            <p>Enter amount and tap to pay</p>
+        </div>
+
+        <div class="display-section">
+            <div class="amount-display" id="amountDisplay">$0.00</div>
+        </div>
+
+        <div class="keypad">
+            <button class="key" onclick="addDigit('1')">1</button>
+            <button class="key" onclick="addDigit('2')">2</button>
+            <button class="key" onclick="addDigit('3')">3</button>
+            <button class="key" onclick="addDigit('4')">4</button>
+            <button class="key" onclick="addDigit('5')">5</button>
+            <button class="key" onclick="addDigit('6')">6</button>
+            <button class="key" onclick="addDigit('7')">7</button>
+            <button class="key" onclick="addDigit('8')">8</button>
+            <button class="key" onclick="addDigit('9')">9</button>
+            <button class="key decimal" onclick="addDecimal()">.</button>
+            <button class="key" onclick="addDigit('0')">0</button>
+            <button class="key clear" onclick="clearAmount()">Clear</button>
+        </div>
+
+        <button class="done-button" id="doneButton" onclick="startPayment()">
+            💰 Charge Customer
+        </button>
+    </div>
+
+    <!-- NFC Status Screens -->
+    <div class="nfc-screen" id="nfcScreen">
+        <div class="nfc-icon">📱</div>
+        <div class="nfc-message">Tap Phone to Pay</div>
+        <div class="nfc-amount" id="nfcAmount">$0.00</div>
+        <div class="nfc-submessage">
+            Hold your phone near the NFC reader<br>
+            <span class="loading-dots">Processing</span>
+        </div>
+    </div>
+
+    <div class="nfc-screen error" id="errorScreen" style="display: none;">
+        <div class="nfc-icon">⚠️</div>
+        <div class="nfc-message">Phone Moved Too Quickly</div>
+        <div class="nfc-submessage">Please try again</div>
+        <button class="retry-button" onclick="retryPayment()">Try Again</button>
+    </div>
+
+    <div class="nfc-screen success-screen" id="successScreen" style="display: none;">
+        <div class="success-icon">✅</div>
+        <div class="nfc-message">Payment Sent!</div>
+        <div class="nfc-amount" id="successAmount">$0.00</div>
+        <div class="nfc-submessage">Transaction completed successfully</div>
+        <button class="retry-button" onclick="newTransaction()">New Transaction</button>
+    </div>
+
+    <script>
+        let currentAmount = 0;
+        let hasDecimal = false;
+        let decimalPlaces = 0;
+        let isProcessing = false;
+
+        function updateDisplay() {
+            const display = document.getElementById('amountDisplay');
+            const formatted = '$' + currentAmount.toFixed(2);
+            display.textContent = formatted;
+            
+            if (currentAmount > 0) {
+                display.classList.add('has-value');
+            } else {
+                display.classList.remove('has-value');
+            }
+            
+            updateDoneButton();
+        }
+
+        function updateDoneButton() {
+            const button = document.getElementById('doneButton');
+            button.disabled = currentAmount <= 0 || isProcessing;
+        }
+
+        function addDigit(digit) {
+            if (isProcessing) return;
+            
+            if (hasDecimal) {
+                if (decimalPlaces < 2) {
+                    currentAmount = currentAmount + (parseInt(digit) / Math.pow(10, decimalPlaces + 2));
+                    decimalPlaces++;
+                }
+            } else {
+                currentAmount = currentAmount * 10 + parseInt(digit);
+            }
+            
+            updateDisplay();
+        }
+
+        function addDecimal() {
+            if (isProcessing || hasDecimal) return;
+            hasDecimal = true;
+            decimalPlaces = 0;
+        }
+
+        function clearAmount() {
+            if (isProcessing) return;
+            currentAmount = 0;
+            hasDecimal = false;
+            decimalPlaces = 0;
+            updateDisplay();
+        }
+
+        function startPayment() {
+            if (currentAmount <= 0 || isProcessing) return;
+            
+            isProcessing = true;
+            updateDoneButton();
+            
+            // Show NFC screen
+            document.getElementById('nfcAmount').textContent = '$' + currentAmount.toFixed(2);
+            document.getElementById('nfcScreen').style.display = 'flex';
+            
+            // Start NFC payment process
+            initiateNFCPayment(currentAmount);
+        }
+
+        function retryPayment() {
+            document.getElementById('errorScreen').style.display = 'none';
+            document.getElementById('nfcScreen').style.display = 'flex';
+            
+            // Restart NFC payment process
+            initiateNFCPayment(currentAmount);
+        }
+
+        function newTransaction() {
+            // Reset everything
+            isProcessing = false;
+            clearAmount();
+            
+            // Hide all screens
+            document.getElementById('successScreen').style.display = 'none';
+            document.getElementById('errorScreen').style.display = 'none';
+            document.getElementById('nfcScreen').style.display = 'none';
+        }
+
+        function showError() {
+            document.getElementById('nfcScreen').style.display = 'none';
+            document.getElementById('errorScreen').style.display = 'flex';
+        }
+
+        function showSuccess() {
+            document.getElementById('nfcScreen').style.display = 'none';
+            document.getElementById('successAmount').textContent = '$' + currentAmount.toFixed(2);
+            document.getElementById('successScreen').style.display = 'flex';
+        }
+
+        async function initiateNFCPayment(amount) {
+            try {
+                const response = await fetch('/api/start-payment', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ amount: amount })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to start payment');
+                }
+
+                // Poll for payment status
+                pollPaymentStatus();
+                
+            } catch (error) {
+                console.error('Payment initiation failed:', error);
+                showError();
+            }
+        }
+
+        async function pollPaymentStatus() {
+            try {
+                const response = await fetch('/api/payment-status');
+                const data = await response.json();
+                
+                switch (data.status) {
+                    case 'waiting':
+                        // Continue polling
+                        setTimeout(pollPaymentStatus, 1000);
+                        break;
+                    case 'success':
+                        showSuccess();
+                        break;
+                    case 'error':
+                        showError();
+                        break;
+                    case 'timeout':
+                        showError();
+                        break;
+                }
+            } catch (error) {
+                console.error('Status polling failed:', error);
+                showError();
+            }
+        }
+
+        // Initialize display
+        updateDisplay();
+
+        // Prevent scrolling and zooming on mobile
+        document.addEventListener('touchmove', function(e) {
+            e.preventDefault();
+        }, { passive: false });
+
+        document.addEventListener('gesturestart', function(e) {
+            e.preventDefault();
+        });
+    </script>
+</body>
+</html> 
