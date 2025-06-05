@@ -45,7 +45,7 @@ export class NFCService {
 
     (reader as any).on('error', (err: Error) => {
       if (err.message.includes('Cannot process ISO 14443-4 tag')) {
-        console.log('💳 Payment card detected - ignoring');
+        console.log('💳 Payment card detected - ignoring tap');
         broadcast({ type: 'nfc_status', message: 'Payment card detected - not supported' });
         return;
       }
@@ -125,6 +125,9 @@ export class NFCService {
         
         // Calculate and send payment request using all tokens across all chains
         await PaymentService.calculateAndSendPayment(portfolio.allTokens, reader, amount);
+        
+        // Update UI to show waiting for payment
+        broadcast({ type: 'status', message: 'Waiting for payment...' });
         
         if (this.cardHandlerResolve) {
           this.cardHandlerResolve({ success: true, message: `Payment request for $${amount.toFixed(2)} sent to ${ethAddress}` });
