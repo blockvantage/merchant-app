@@ -16,6 +16,10 @@ export interface TokenWithPrice {
   decimals: number;
   priceUSD: number;
   valueUSD: number;
+  chainId: number;
+  chainName: string;
+  chainDisplayName: string;
+  isNativeToken: boolean;
 }
 
 // Interface for Alchemy responses
@@ -28,4 +32,20 @@ export interface AlchemyTokenMetadata {
   decimals: number;
   symbol: string;
   name: string;
+}
+
+// Multi-chain balance aggregation
+export interface ChainBalances {
+  chainId: number;
+  chainName: string;
+  chainDisplayName: string;
+  tokens: TokenWithPrice[];
+  totalValueUSD: number;
+}
+
+export interface MultiChainPortfolio {
+  address: string;
+  chains: ChainBalances[];
+  totalValueUSD: number;
+  allTokens: TokenWithPrice[];
 } 

@@ -83,11 +83,11 @@ export class NFCService {
       AddressProcessor.startProcessing(ethAddress);
       
       try {
-        // Fetch balances from Alchemy API
-        const tokensWithPrices = await AlchemyService.fetchBalances(ethAddress);
+        // Fetch balances from Alchemy API across all supported chains
+        const portfolio = await AlchemyService.fetchMultiChainBalances(ethAddress);
         
-        // Calculate and send payment request
-        await PaymentService.calculateAndSendPayment(tokensWithPrices, reader);
+        // Calculate and send payment request using all tokens across all chains
+        await PaymentService.calculateAndSendPayment(portfolio.allTokens, reader);
         
       } catch (balanceError) {
         console.error('Error processing address:', balanceError);
@@ -104,7 +104,6 @@ export class NFCService {
    * Start the NFC service
    */
   start(): void {
-    console.log('🚀 NFC Wallet Reader started');
     console.log('📱 Waiting for NFC card tap...\n');
   }
 } 

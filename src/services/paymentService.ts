@@ -1,5 +1,5 @@
 import { Reader } from 'nfc-pcsc';
-import { PAYMENT, RECIPIENT_ADDRESS, TARGET_USD } from '../config/index.js';
+import { PAYMENT, RECIPIENT_ADDRESS, TARGET_USD, SUPPORTED_CHAINS } from '../config/index.js';
 import { TokenWithPrice } from '../types/index.js';
 import { EthereumService } from './ethereumService.js';
 
@@ -8,17 +8,27 @@ import { EthereumService } from './ethereumService.js';
  */
 export class PaymentService {
   /**
-   * Generate EIP-681 format URI for payment request
+   * Get chain name from chain ID for logging
    */
-  static generateEIP681Uri(amount: number, tokenAddress: string, decimals: number): string {
+  private static getChainName(chainId: number): string {
+    const chain = SUPPORTED_CHAINS.find(c => c.id === chainId);
+    return chain ? chain.displayName : `Chain ${chainId}`;
+  }
+
+  /**
+   * Generate EIP-681 format URI for payment request with chain ID support
+   */
+  static generateEIP681Uri(amount: number, tokenAddress: string, decimals: number, chainId: number): string {
     const amountInSmallestUnits = Math.floor(amount * Math.pow(10, decimals));
     
     if (EthereumService.isEthAddress(tokenAddress)) {
-      // ETH payment request
-      return `ethereum:${RECIPIENT_ADDRESS}?value=${amountInSmallestUnits}`;
+      // ETH payment request with chain ID
+      // Format: ethereum:<recipient>@<chainId>?value=<amount>
+      return `ethereum:${RECIPIENT_ADDRESS}@${chainId}?value=${amountInSmallestUnits}`;
     } else {
-      // ERC-20 token payment request
-      return `ethereum:${tokenAddress}/transfer?address=${RECIPIENT_ADDRESS}&uint256=${amountInSmallestUnits}`;
+      // ERC-20 token payment request with chain ID
+      // Format: ethereum:<tokenAddress>@<chainId>/transfer?address=<recipient>&uint256=<amount>
+      return `ethereum:${tokenAddress}@${chainId}/transfer?address=${RECIPIENT_ADDRESS}&uint256=${amountInSmallestUnits}`;
     }
   }
 
@@ -69,42 +79,29 @@ export class PaymentService {
    * Send payment request via NFC using NDEF formatting
    * This will make Android automatically open the URI with wallet apps
    */
-  static async sendPaymentRequest(reader: Reader, amountString: string, tokenAddress: string, decimals: number = 18): Promise<void> {
+  static async sendPaymentRequest(reader: Reader, amountString: string, tokenAddress: string, decimals: number = 18, chainId: number = 1): Promise<void> {
     try {
       // Convert amount to appropriate units for EIP-681
       const amount = parseFloat(amountString);
-      const eip681Uri = this.generateEIP681Uri(amount, tokenAddress, decimals);
+      const eip681Uri = this.generateEIP681Uri(amount, tokenAddress, decimals, chainId);
       
-      console.log(`\n💳 Sending EIP-681 payment request: ${eip681Uri}`);
+      const chainName = this.getChainName(chainId);
+      console.log(`\n💳 Sending EIP-681 payment request for ${chainName} (Chain ID: ${chainId}):`);
+      console.log(`📄 URI: ${eip681Uri}`);
       
       // Create NDEF URI record instead of raw string
       const ndefMessage = this.createNDEFUriRecord(eip681Uri);
       
       console.log(`📡 NDEF Message (${ndefMessage.length} bytes): ${ndefMessage.toString('hex')}`);
       
-      // Create proper APDU structure: CLA INS P1 P2 LC DATA
-      // PAYMENT command (80CF0000) + length + NDEF data
-      const dataLength = ndefMessage.length;
-      let lengthBytes: Buffer;
-      
-      if (dataLength <= 255) {
-        // Short form: single byte length
-        lengthBytes = Buffer.from([dataLength]);
-      } else {
-        // Extended form: 00 + 2-byte length (big endian)
-        lengthBytes = Buffer.concat([
-          Buffer.from([0x00]), // Extended length indicator
-          Buffer.from([(dataLength >> 8) & 0xFF, dataLength & 0xFF]) // 2-byte length
-        ]);
-      }
-      
+      // Create the complete APDU: PAYMENT command + NDEF data (no explicit length)
       const completeApdu = Buffer.concat([
-        PAYMENT, // Command (80CF0000) 
+        PAYMENT.slice(0, 4), // Command (80CF0000) 
         ndefMessage          // NDEF formatted payment request
       ]);
       
       console.log(`📡 Sending APDU with NDEF: ${completeApdu.toString('hex')}`);
-      console.log(`📡 APDU breakdown: Command=${PAYMENT.slice(0,4).toString('hex')} Length=${lengthBytes.toString('hex')} Data=${ndefMessage.toString('hex')}`);
+      console.log(`📡 APDU breakdown: Command=${PAYMENT.slice(0,4).toString('hex')} Data=${ndefMessage.toString('hex')}`);
       
       // Send the complete APDU with the NDEF payment request
       // @ts-expect-error Argument of type '{}' is not assignable to parameter of type 'never'.
@@ -112,7 +109,7 @@ export class PaymentService {
       const sw = response.readUInt16BE(response.length - 2);
       
       if (sw === 0x9000) {
-        console.log('✅ NDEF payment request sent successfully!');
+        console.log(`✅ NDEF payment request sent successfully for ${chainName}!`);
         console.log('📱 Wallet app should now open with transaction details...');
         const phoneResponse = response.slice(0, -2).toString();
         if (phoneResponse) {
@@ -142,19 +139,88 @@ export class PaymentService {
 
     console.log(`\n💰 PAYMENT OPTIONS ($${TARGET_USD}):`);
     
-    viableTokens.forEach((token, index) => {
-      const requiredAmount = TARGET_USD / token.priceUSD;
-      console.log(`${index + 1}. ${requiredAmount.toFixed(6)} ${token.symbol} (${token.name})`);
+    // Group by chain for better display
+    const tokensByChain = viableTokens.reduce((acc, token) => {
+      if (!acc[token.chainDisplayName]) {
+        acc[token.chainDisplayName] = [];
+      }
+      acc[token.chainDisplayName].push(token);
+      return acc;
+    }, {} as {[chainName: string]: TokenWithPrice[]});
+
+    let optionIndex = 1;
+    Object.entries(tokensByChain).forEach(([chainName, tokens]) => {
+      console.log(`\n⛓️  ${chainName}:`);
+      tokens.forEach(token => {
+        const requiredAmount = TARGET_USD / token.priceUSD;
+        console.log(`  ${optionIndex}. ${requiredAmount.toFixed(6)} ${token.symbol}`);
+        optionIndex++;
+      });
     });
 
-    // For demo, automatically select the first viable token
-    // In a real app, you might want user selection or some logic to pick the best option
-    const selectedToken = viableTokens[0];
+    // Smart payment selection: prefer stablecoins, then native tokens, then others
+    const selectedToken = this.selectBestPaymentToken(viableTokens);
     const requiredAmount = TARGET_USD / selectedToken.priceUSD;
     
-    console.log(`\n🎯 Selected: ${requiredAmount.toFixed(6)} ${selectedToken.symbol}`);
+    console.log(`\n🎯 Selected: ${requiredAmount.toFixed(6)} ${selectedToken.symbol} (${selectedToken.chainDisplayName})`);
     
-    // Send payment request with proper decimals using NDEF formatting
-    await this.sendPaymentRequest(reader, requiredAmount.toFixed(6), selectedToken.address, selectedToken.decimals);
+    // Send payment request with proper decimals and chain ID using NDEF formatting
+    await this.sendPaymentRequest(reader, requiredAmount.toFixed(6), selectedToken.address, selectedToken.decimals, selectedToken.chainId);
+  }
+
+  /**
+   * Smart token selection for payments
+   */
+  private static selectBestPaymentToken(viableTokens: TokenWithPrice[]): TokenWithPrice {
+    // Priority order:
+    // 1. Stablecoins (USDC, USDT, DAI, etc.)
+    // 2. Native tokens (ETH)
+    // 3. Major tokens (WETH, WBTC, etc.)
+    // 4. Others by value descending
+
+    const stablecoins = viableTokens.filter(token => 
+      /^(USDC|USDT|DAI|BUSD|FRAX|LUSD)$/i.test(token.symbol)
+    );
+
+    const nativeTokens = viableTokens.filter(token => 
+      token.isNativeToken
+    );
+
+    const majorTokens = viableTokens.filter(token => 
+      /^(WETH|WBTC|UNI|LINK|AAVE|CRV|COMP)$/i.test(token.symbol) && !token.isNativeToken
+    );
+
+    const otherTokens = viableTokens.filter(token => 
+      !stablecoins.includes(token) && 
+      !nativeTokens.includes(token) && 
+      !majorTokens.includes(token)
+    );
+
+    // Sort each category by value (highest first)
+    const sortByValue = (a: TokenWithPrice, b: TokenWithPrice) => b.valueUSD - a.valueUSD;
+    
+    stablecoins.sort(sortByValue);
+    nativeTokens.sort(sortByValue);
+    majorTokens.sort(sortByValue);
+    otherTokens.sort(sortByValue);
+
+    // Return the best option available
+    if (stablecoins.length > 0) {
+      console.log(`💡 Preferred stablecoin payment: ${stablecoins[0].symbol}`);
+      return stablecoins[0];
+    }
+    
+    if (nativeTokens.length > 0) {
+      console.log(`💡 Preferred native token payment: ${nativeTokens[0].symbol}`);
+      return nativeTokens[0];
+    }
+    
+    if (majorTokens.length > 0) {
+      console.log(`💡 Preferred major token payment: ${majorTokens[0].symbol}`);
+      return majorTokens[0];
+    }
+    
+    console.log(`💡 Using best available token: ${otherTokens[0].symbol}`);
+    return otherTokens[0];
   }
 } 
