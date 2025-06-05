@@ -23,7 +23,51 @@ export class PaymentService {
   }
 
   /**
-   * Send payment request via NFC
+   * Create NDEF URI record for the EIP-681 payment request
+   * This formats the URI so Android will automatically open it with wallet apps
+   */
+  static createNDEFUriRecord(uri: string): Buffer {
+    // NDEF URI Record structure:
+    // - Record Header: TNF (3 bits) + flags (5 bits)
+    // - Type Length: 1 byte
+    // - Payload Length: 1-4 bytes  
+    // - Type: "U" for URI
+    // - Payload: URI abbreviation code + URI
+
+    const uriBytes = Buffer.from(uri, 'utf8');
+    
+    // URI abbreviation codes - 0x00 means no abbreviation (full URI)
+    const uriAbbreviation = 0x00;
+    
+    // NDEF Record Header
+    // TNF = 001 (Well Known), MB=1 (Message Begin), ME=1 (Message End), SR=1 (Short Record)
+    const recordHeader = 0xD1; // 11010001 binary
+    
+    // Type Length (always 1 for URI records)
+    const typeLength = 0x01;
+    
+    // Payload Length (URI abbreviation byte + URI bytes)
+    const payloadLength = uriBytes.length + 1;
+    
+    // Type field ("U" for URI)
+    const recordType = Buffer.from('U', 'ascii');
+    
+    // Create the complete NDEF message
+    const ndefMessage = Buffer.concat([
+      Buffer.from([recordHeader]),           // Record header
+      Buffer.from([typeLength]),             // Type length  
+      Buffer.from([payloadLength]),          // Payload length
+      recordType,                            // Type ("U")
+      Buffer.from([uriAbbreviation]),        // URI abbreviation code
+      uriBytes                               // The actual URI
+    ]);
+
+    return ndefMessage;
+  }
+
+  /**
+   * Send payment request via NFC using NDEF formatting
+   * This will make Android automatically open the URI with wallet apps
    */
   static async sendPaymentRequest(reader: Reader, amountString: string, tokenAddress: string, decimals: number = 18): Promise<void> {
     try {
@@ -33,24 +77,43 @@ export class PaymentService {
       
       console.log(`\n💳 Sending EIP-681 payment request: ${eip681Uri}`);
       
-      // Convert the EIP-681 URI to buffer
-      const requestBuffer = Buffer.from(eip681Uri, 'utf8');
+      // Create NDEF URI record instead of raw string
+      const ndefMessage = this.createNDEFUriRecord(eip681Uri);
       
-      // Create the complete APDU: PAYMENT command + data
+      console.log(`📡 NDEF Message (${ndefMessage.length} bytes): ${ndefMessage.toString('hex')}`);
+      
+      // Create proper APDU structure: CLA INS P1 P2 LC DATA
+      // PAYMENT command (80CF0000) + length + NDEF data
+      const dataLength = ndefMessage.length;
+      let lengthBytes: Buffer;
+      
+      if (dataLength <= 255) {
+        // Short form: single byte length
+        lengthBytes = Buffer.from([dataLength]);
+      } else {
+        // Extended form: 00 + 2-byte length (big endian)
+        lengthBytes = Buffer.concat([
+          Buffer.from([0x00]), // Extended length indicator
+          Buffer.from([(dataLength >> 8) & 0xFF, dataLength & 0xFF]) // 2-byte length
+        ]);
+      }
+      
       const completeApdu = Buffer.concat([
-        PAYMENT, // Command (80CF0000)
-        requestBuffer // The actual payment request data
+        PAYMENT, // Command (80CF0000) 
+        ndefMessage          // NDEF formatted payment request
       ]);
       
-      console.log(`📡 Sending APDU: ${completeApdu}`);
+      console.log(`📡 Sending APDU with NDEF: ${completeApdu.toString('hex')}`);
+      console.log(`📡 APDU breakdown: Command=${PAYMENT.slice(0,4).toString('hex')} Length=${lengthBytes.toString('hex')} Data=${ndefMessage.toString('hex')}`);
       
-      // Send the complete APDU with the payment request data
+      // Send the complete APDU with the NDEF payment request
       // @ts-expect-error Argument of type '{}' is not assignable to parameter of type 'never'.
-      const response = await reader.transmit(completeApdu, Math.max(256, requestBuffer.length + 10), {});
+      const response = await reader.transmit(completeApdu, Math.max(256, ndefMessage.length + 10), {});
       const sw = response.readUInt16BE(response.length - 2);
       
       if (sw === 0x9000) {
-        console.log('✅ Payment request sent successfully!');
+        console.log('✅ NDEF payment request sent successfully!');
+        console.log('📱 Wallet app should now open with transaction details...');
         const phoneResponse = response.slice(0, -2).toString();
         if (phoneResponse) {
           console.log(`📱 Phone response: ${phoneResponse}`);
@@ -91,7 +154,7 @@ export class PaymentService {
     
     console.log(`\n🎯 Selected: ${requiredAmount.toFixed(6)} ${selectedToken.symbol}`);
     
-    // Send payment request with proper decimals
+    // Send payment request with proper decimals using NDEF formatting
     await this.sendPaymentRequest(reader, requiredAmount.toFixed(6), selectedToken.address, selectedToken.decimals);
   }
 } 
