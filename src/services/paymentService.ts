@@ -143,32 +143,75 @@ export class PaymentService {
     }
 
     console.log(`\n💰 PAYMENT OPTIONS ($${targetUSD}):`);
+    console.log(`🎯 Priority Order: L2 Stablecoin > L2 Other > L2 ETH > L1 Stablecoin > L1 Other > L1 ETH\n`);
     
-    // Group by chain for better display
-    const tokensByChain = viableTokens.reduce((acc, token) => {
-      if (!acc[token.chainDisplayName]) {
-        acc[token.chainDisplayName] = [];
-      }
-      acc[token.chainDisplayName].push(token);
-      return acc;
-    }, {} as {[chainName: string]: TokenWithPrice[]});
-
-    let optionIndex = 1;
-    Object.entries(tokensByChain).forEach(([chainName, tokens]) => {
-      console.log(`\n⛓️  ${chainName}:`);
+    // Group by priority categories for better display
+    const L1_CHAINS = [1]; // Ethereum mainnet
+    const L2_CHAINS = [8453, 42161, 10, 137, 393402133025423]; // Base, Arbitrum, Optimism, Polygon, Starknet
+    
+    const isStablecoin = (token: TokenWithPrice): boolean => {
+      return /^(USDC|USDT|DAI|BUSD|FRAX|LUSD|USDCE|USDC\.E|USDT\.E|DAI\.E)$/i.test(token.symbol);
+    };
+    
+    const categorizeForDisplay = (tokens: TokenWithPrice[]) => {
+      const categories = {
+        'L2 Stablecoins (Priority 1)': [] as TokenWithPrice[],
+        'L2 Other Tokens (Priority 2)': [] as TokenWithPrice[],
+        'L2 ETH/Native (Priority 3)': [] as TokenWithPrice[],
+        'L1 Stablecoins (Priority 4)': [] as TokenWithPrice[],
+        'L1 Other Tokens (Priority 5)': [] as TokenWithPrice[],
+        'L1 ETH (Priority 6)': [] as TokenWithPrice[]
+      };
+      
       tokens.forEach(token => {
-        const requiredAmount = targetUSD / token.priceUSD;
-        console.log(`  ${optionIndex}. ${requiredAmount.toFixed(6)} ${token.symbol}`);
-        optionIndex++;
+        const isL2 = L2_CHAINS.includes(token.chainId);
+        
+        if (isL2) {
+          if (isStablecoin(token)) {
+            categories['L2 Stablecoins (Priority 1)'].push(token);
+          } else if (token.isNativeToken) {
+            categories['L2 ETH/Native (Priority 3)'].push(token);
+          } else {
+            categories['L2 Other Tokens (Priority 2)'].push(token);
+          }
+        } else {
+          if (isStablecoin(token)) {
+            categories['L1 Stablecoins (Priority 4)'].push(token);
+          } else if (token.isNativeToken) {
+            categories['L1 ETH (Priority 6)'].push(token);
+          } else {
+            categories['L1 Other Tokens (Priority 5)'].push(token);
+          }
+        }
       });
+      
+      return categories;
+    };
+
+    const tokensByPriority = categorizeForDisplay(viableTokens);
+    
+    let optionIndex = 1;
+    Object.entries(tokensByPriority).forEach(([categoryName, tokens]) => {
+      if (tokens.length > 0) {
+        console.log(`\n🏆 ${categoryName}:`);
+        tokens.forEach(token => {
+          const requiredAmount = targetUSD / token.priceUSD;
+          console.log(`  ${optionIndex}. ${requiredAmount.toFixed(6)} ${token.symbol} (${token.chainDisplayName})`);
+          optionIndex++;
+        });
+      }
     });
 
-    // Smart payment selection: prefer stablecoins, then native tokens, then others
+    // Smart payment selection: prefer L2 stablecoins, then follow priority order
     const selectedToken = this.selectBestPaymentToken(viableTokens);
     const requiredAmount = targetUSD / selectedToken.priceUSD;
     
-    console.log(`\n🎯 Selected: ${requiredAmount.toFixed(6)} ${selectedToken.symbol} (${selectedToken.chainDisplayName})`);
-    console.log(`⛓️ Payment will be monitored on: ${selectedToken.chainDisplayName} (Chain ID: ${selectedToken.chainId})`);
+    console.log(`\n🎯 SELECTED PAYMENT:`);
+    console.log(`💳 Token: ${selectedToken.symbol}`);
+    console.log(`💰 Amount: ${requiredAmount.toFixed(6)} ${selectedToken.symbol}`);
+    console.log(`⛓️  Chain: ${selectedToken.chainDisplayName} (Chain ID: ${selectedToken.chainId})`);
+    console.log(`💵 Value: $${selectedToken.priceUSD.toFixed(4)} per ${selectedToken.symbol}`);
+    console.log(`🔍 Payment will be monitored on: ${selectedToken.chainDisplayName}`);
     
     // Send payment request with proper decimals and chain ID using NDEF formatting
     await this.sendPaymentRequest(reader, requiredAmount.toFixed(6), selectedToken.address, selectedToken.decimals, selectedToken.chainId);
@@ -183,58 +226,137 @@ export class PaymentService {
   }
 
   /**
-   * Smart token selection for payments
+   * Smart token selection for payments with L2-first priority
+   * Priority order: L2 Stablecoin > L2 Other > L2 ETH > L1 Stablecoin > L1 Other > L1 ETH
    */
   private static selectBestPaymentToken(viableTokens: TokenWithPrice[]): TokenWithPrice {
-    // Priority order:
-    // 1. Stablecoins (USDC, USDT, DAI, etc.)
-    // 2. Native tokens (ETH)
-    // 3. Major tokens (WETH, WBTC, etc.)
-    // 4. Others by value descending
-
-    const stablecoins = viableTokens.filter(token => 
-      /^(USDC|USDT|DAI|BUSD|FRAX|LUSD)$/i.test(token.symbol)
-    );
-
-    const nativeTokens = viableTokens.filter(token => 
-      token.isNativeToken
-    );
-
-    const majorTokens = viableTokens.filter(token => 
-      /^(WETH|WBTC|UNI|LINK|AAVE|CRV|COMP)$/i.test(token.symbol) && !token.isNativeToken
-    );
-
-    const otherTokens = viableTokens.filter(token => 
-      !stablecoins.includes(token) && 
-      !nativeTokens.includes(token) && 
-      !majorTokens.includes(token)
-    );
-
-    // Sort each category by value (highest first)
+    // Define L1 and L2 chains
+    const L1_CHAINS = [1]; // Ethereum mainnet
+    const L2_CHAINS = [8453, 42161, 10, 137, 393402133025423]; // Base, Arbitrum, Optimism, Polygon, Starknet
+    
+    // Helper function to check if token is a stablecoin
+    const isStablecoin = (token: TokenWithPrice): boolean => {
+      return /^(USDC|USDT|DAI|BUSD|FRAX|LUSD|USDCE|USDC\.E|USDT\.E|DAI\.E)$/i.test(token.symbol);
+    };
+    
+    // Helper function to check if token is ETH (native token)
+    const isETH = (token: TokenWithPrice): boolean => {
+      return token.isNativeToken && token.symbol === 'ETH';
+    };
+    
+    // Helper function to check if token is MATIC (Polygon native)
+    const isMATIC = (token: TokenWithPrice): boolean => {
+      return token.isNativeToken && token.symbol === 'MATIC';
+    };
+    
+    // Helper function to check if token is "other" (not stablecoin, not native)
+    const isOther = (token: TokenWithPrice): boolean => {
+      return !isStablecoin(token) && !token.isNativeToken;
+    };
+    
+    // Categorize tokens by chain type and token type
+    const categorizeTokens = (tokens: TokenWithPrice[]) => {
+      const categories = {
+        l2Stablecoins: [] as TokenWithPrice[],
+        l2Other: [] as TokenWithPrice[],
+        l2ETH: [] as TokenWithPrice[],
+        l2Native: [] as TokenWithPrice[], // For MATIC on Polygon
+        l1Stablecoins: [] as TokenWithPrice[],
+        l1Other: [] as TokenWithPrice[],
+        l1ETH: [] as TokenWithPrice[]
+      };
+      
+      tokens.forEach(token => {
+        const isL2 = L2_CHAINS.includes(token.chainId);
+        
+        if (isL2) {
+          if (isStablecoin(token)) {
+            categories.l2Stablecoins.push(token);
+          } else if (isETH(token)) {
+            categories.l2ETH.push(token);
+          } else if (isMATIC(token)) {
+            categories.l2Native.push(token);
+          } else if (isOther(token)) {
+            categories.l2Other.push(token);
+          }
+        } else {
+          // L1 tokens
+          if (isStablecoin(token)) {
+            categories.l1Stablecoins.push(token);
+          } else if (isETH(token)) {
+            categories.l1ETH.push(token);
+          } else if (isOther(token)) {
+            categories.l1Other.push(token);
+          }
+        }
+      });
+      
+      return categories;
+    };
+    
+    const categories = categorizeTokens(viableTokens);
+    
+    // Display selection summary
+    console.log(`\n🧮 TOKEN SELECTION ANALYSIS:`);
+    console.log(`   L2 Stablecoins: ${categories.l2Stablecoins.length} tokens`);
+    console.log(`   L2 Other Tokens: ${categories.l2Other.length} tokens`);
+    console.log(`   L2 ETH/Native: ${categories.l2ETH.length + categories.l2Native.length} tokens`);
+    console.log(`   L1 Stablecoins: ${categories.l1Stablecoins.length} tokens`);
+    console.log(`   L1 Other Tokens: ${categories.l1Other.length} tokens`);
+    console.log(`   L1 ETH: ${categories.l1ETH.length} tokens`);
+    
+    // Sort each category by value (highest first) for best selection within each priority level
     const sortByValue = (a: TokenWithPrice, b: TokenWithPrice) => b.valueUSD - a.valueUSD;
     
-    stablecoins.sort(sortByValue);
-    nativeTokens.sort(sortByValue);
-    majorTokens.sort(sortByValue);
-    otherTokens.sort(sortByValue);
-
-    // Return the best option available
-    if (stablecoins.length > 0) {
-      console.log(`💡 Preferred stablecoin payment: ${stablecoins[0].symbol}`);
-      return stablecoins[0];
+    Object.values(categories).forEach(category => {
+      category.sort(sortByValue);
+    });
+    
+    // Priority selection logic
+    if (categories.l2Stablecoins.length > 0) {
+      const selected = categories.l2Stablecoins[0];
+      console.log(`💡 Preferred payment: L2 Stablecoin - ${selected.symbol} on ${selected.chainDisplayName}`);
+      return selected;
     }
     
-    if (nativeTokens.length > 0) {
-      console.log(`💡 Preferred native token payment: ${nativeTokens[0].symbol}`);
-      return nativeTokens[0];
+    if (categories.l2Other.length > 0) {
+      const selected = categories.l2Other[0];
+      console.log(`💡 Preferred payment: L2 Other Token - ${selected.symbol} on ${selected.chainDisplayName}`);
+      return selected;
     }
     
-    if (majorTokens.length > 0) {
-      console.log(`💡 Preferred major token payment: ${majorTokens[0].symbol}`);
-      return majorTokens[0];
+    if (categories.l2ETH.length > 0) {
+      const selected = categories.l2ETH[0];
+      console.log(`💡 Preferred payment: L2 ETH - ${selected.symbol} on ${selected.chainDisplayName}`);
+      return selected;
     }
     
-    console.log(`💡 Using best available token: ${otherTokens[0].symbol}`);
-    return otherTokens[0];
+    if (categories.l2Native.length > 0) {
+      const selected = categories.l2Native[0];
+      console.log(`💡 Preferred payment: L2 Native Token - ${selected.symbol} on ${selected.chainDisplayName}`);
+      return selected;
+    }
+    
+    if (categories.l1Stablecoins.length > 0) {
+      const selected = categories.l1Stablecoins[0];
+      console.log(`💡 Preferred payment: L1 Stablecoin - ${selected.symbol} on ${selected.chainDisplayName}`);
+      return selected;
+    }
+    
+    if (categories.l1Other.length > 0) {
+      const selected = categories.l1Other[0];
+      console.log(`💡 Preferred payment: L1 Other Token - ${selected.symbol} on ${selected.chainDisplayName}`);
+      return selected;
+    }
+    
+    if (categories.l1ETH.length > 0) {
+      const selected = categories.l1ETH[0];
+      console.log(`💡 Preferred payment: L1 ETH - ${selected.symbol} on ${selected.chainDisplayName}`);
+      return selected;
+    }
+    
+    // Fallback (should not happen if viableTokens is not empty)
+    console.log(`💡 Fallback: Using first available token - ${viableTokens[0].symbol}`);
+    return viableTokens[0];
   }
 } 
