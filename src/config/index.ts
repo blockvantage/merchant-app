@@ -98,4 +98,9 @@ export const COINGECKO_PLATFORMS: {[chainName: string]: string} = {
   'base': 'base',
   'arbitrum': 'arbitrum-one', 
   'optimism': 'optimistic-ethereum'
+};
+
+export const config = {
+    ALCHEMY_API_KEY: process.env.ALCHEMY_API_KEY || '',
+    // ... other existing config values ...
 }; 

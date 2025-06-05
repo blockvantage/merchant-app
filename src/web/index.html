@@ -183,6 +183,14 @@
             padding: 40px;
         }
 
+        .nfc-screen.waiting-payment {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        }
+
+        .nfc-screen.payment-approved {
+            background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%);
+        }
+
         .nfc-screen.error {
             background: linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%);
         }
@@ -262,6 +270,39 @@
             margin-bottom: 30px;
         }
 
+        .spinner {
+            width: 80px;
+            height: 80px;
+            border: 8px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+            margin-bottom: 30px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .checkmark {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 30px;
+            position: relative;
+        }
+
+        .checkmark::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(45deg);
+            width: 20px;
+            height: 40px;
+            border-right: 8px solid white;
+            border-bottom: 8px solid white;
+        }
+
         /* Responsive adjustments for 5" screen */
         @media (max-width: 600px) and (max-height: 400px) {
             .container { padding: 15px; }
@@ -333,7 +374,128 @@
     </div>
 
     <script>
+        let ws;
         let currentAmount = 0;
+        let merchantAddress = ''; // Will be set when payment is initiated
+        let paymentTimeout;
+
+        function connectWebSocket() {
+            ws = new WebSocket(`ws://${window.location.host}`);
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                console.log('Received:', data);
+                
+                switch(data.type) {
+                    case 'status':
+                        updateStatus(data.message, data.isError);
+                        break;
+                    case 'payment_success':
+                        showWaitingPayment(data.amount);
+                        break;
+                    case 'payment_failure':
+                        showError(data.message);
+                        break;
+                    case 'transaction_confirmed':
+                        showPaymentApproved();
+                        break;
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                setTimeout(connectWebSocket, 1000);
+            };
+        }
+
+        function updateStatus(message, isError = false) {
+            const nfcScreen = document.getElementById('nfcScreen');
+            const nfcMessage = nfcScreen.querySelector('.nfc-message');
+            nfcMessage.textContent = message;
+            
+            if (isError) {
+                nfcScreen.classList.add('error');
+                nfcScreen.classList.remove('waiting-payment', 'payment-approved');
+            }
+        }
+
+        function showWaitingPayment(amount) {
+            const nfcScreen = document.getElementById('nfcScreen');
+            const nfcAmount = document.getElementById('nfcAmount');
+            const spinner = nfcScreen.querySelector('.spinner');
+            const checkmark = nfcScreen.querySelector('.checkmark');
+            
+            nfcScreen.style.display = 'flex';
+            nfcScreen.classList.add('waiting-payment');
+            nfcScreen.classList.remove('error', 'payment-approved');
+            nfcAmount.textContent = `$${amount.toFixed(2)}`;
+            
+            spinner.style.display = 'block';
+            checkmark.style.display = 'none';
+            
+            // Set timeout for payment monitoring
+            if (paymentTimeout) clearTimeout(paymentTimeout);
+            paymentTimeout = setTimeout(() => {
+                showError('Payment timeout - no transaction detected');
+            }, 300000); // 5 minutes timeout
+        }
+
+        function showPaymentApproved() {
+            const nfcScreen = document.getElementById('nfcScreen');
+            const spinner = nfcScreen.querySelector('.spinner');
+            const checkmark = nfcScreen.querySelector('.checkmark');
+            
+            nfcScreen.classList.remove('waiting-payment', 'error');
+            nfcScreen.classList.add('payment-approved');
+            
+            spinner.style.display = 'none';
+            checkmark.style.display = 'block';
+            
+            // Clear the timeout since payment was successful
+            if (paymentTimeout) clearTimeout(paymentTimeout);
+            
+            // Return to main screen after 5 seconds
+            setTimeout(() => {
+                nfcScreen.style.display = 'none';
+                resetUI();
+            }, 5000);
+        }
+
+        function showError(message) {
+            const nfcScreen = document.getElementById('nfcScreen');
+            const nfcMessage = nfcScreen.querySelector('.nfc-message');
+            const spinner = nfcScreen.querySelector('.spinner');
+            const checkmark = nfcScreen.querySelector('.checkmark');
+            
+            nfcScreen.style.display = 'flex';
+            nfcScreen.classList.add('error');
+            nfcScreen.classList.remove('waiting-payment', 'payment-approved');
+            nfcMessage.textContent = message;
+            
+            spinner.style.display = 'none';
+            checkmark.style.display = 'none';
+            
+            // Clear the timeout
+            if (paymentTimeout) clearTimeout(paymentTimeout);
+        }
+
+        function resetUI() {
+            const nfcScreen = document.getElementById('nfcScreen');
+            const nfcAmount = document.getElementById('nfcAmount');
+            const spinner = nfcScreen.querySelector('.spinner');
+            const checkmark = nfcScreen.querySelector('.checkmark');
+            
+            nfcScreen.style.display = 'none';
+            nfcScreen.classList.remove('error', 'waiting-payment', 'payment-approved');
+            nfcAmount.textContent = '$0.00';
+            spinner.style.display = 'block';
+            checkmark.style.display = 'none';
+            currentAmount = 0;
+        }
+
+        // Initialize WebSocket connection
+        connectWebSocket();
+
         let hasDecimal = false;
         let decimalPlaces = 0;
         let isProcessing = false;

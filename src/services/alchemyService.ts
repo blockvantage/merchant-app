@@ -1,15 +1,54 @@
 import { SUPPORTED_CHAINS, ChainConfig } from '../config/index.js';
 import { TokenWithPrice, AlchemyTokenBalance, AlchemyTokenMetadata, MultiChainPortfolio, ChainBalances } from '../types/index.js';
 import { PriceService } from './priceService.js';
+import { Alchemy, Network, TransactionReceipt, TransactionResponse, AlchemySubscription, AlchemyMinedTransactionsAddress } from 'alchemy-sdk';
+import { config } from '../config/index.js';
+
+interface Transaction {
+    hash: string;
+    value: number;
+    from: string;
+    to: string;
+}
 
 /**
  * Service for interacting with Alchemy API to fetch wallet balances across multiple chains
  */
 export class AlchemyService {
+  private static alchemy: Alchemy;
+  private static isInitialized = false;
+
+  static initialize() {
+    if (this.isInitialized) return;
+
+    if (!config.ALCHEMY_API_KEY) {
+      throw new Error('ALCHEMY_API_KEY is not set in environment variables');
+    }
+
+    try {
+      this.alchemy = new Alchemy({
+        apiKey: config.ALCHEMY_API_KEY,
+        network: Network.ETH_MAINNET,
+      });
+
+      this.isInitialized = true;
+      console.log('✅ AlchemyService initialized successfully');
+    } catch (error) {
+      console.error('❌ Failed to initialize AlchemyService:', error);
+      throw error;
+    }
+  }
+
+  static isEthereumAddress(address: string): boolean {
+    return /^0x[a-fA-F0-9]{40}$/.test(address);
+  }
+
   /**
    * Fetch all balances across all supported chains in parallel
    */
   static async fetchMultiChainBalances(address: string): Promise<MultiChainPortfolio> {
+    if (!this.isInitialized) this.initialize();
+
     try {
       console.log(`\n🔄 Fetching balances for ${address} across ${SUPPORTED_CHAINS.length} chains...`);
 
@@ -291,5 +330,61 @@ export class AlchemyService {
   static async fetchBalances(address: string): Promise<TokenWithPrice[]> {
     const portfolio = await this.fetchMultiChainBalances(address);
     return portfolio.allTokens;
+  }
+
+  static async monitorTransactions(
+    address: string,
+    callback: (tx: Transaction) => void
+  ): Promise<() => void> {
+    if (!this.isInitialized) this.initialize();
+
+    if (!this.isEthereumAddress(address)) {
+      throw new Error(`Invalid Ethereum address: ${address}`);
+    }
+
+    try {
+      console.log(`🔍 Starting transaction monitoring for address: ${address}`);
+      
+      // Subscribe to new pending transactions
+      const subscription = await this.alchemy.ws.on(
+        {
+          method: AlchemySubscription.MINED_TRANSACTIONS,
+          addresses: [{ to: address } as AlchemyMinedTransactionsAddress],
+        },
+        async (tx: TransactionResponse) => {
+          try {
+            if (!tx.hash || !tx.from || !tx.to) {
+              console.error('Invalid transaction data:', tx);
+              return;
+            }
+
+            // Get transaction receipt to confirm it's mined
+            const receipt = await this.alchemy.core.getTransactionReceipt(tx.hash);
+            if (receipt && receipt.status === 1) {
+              console.log(`✅ Transaction confirmed: ${tx.hash}`);
+              callback({
+                hash: tx.hash,
+                value: parseInt(tx.value.toString(), 16),
+                from: tx.from,
+                to: tx.to,
+              });
+            }
+          } catch (error) {
+            console.error('Error processing transaction:', error);
+          }
+        }
+      );
+
+      console.log('✅ Transaction monitoring subscription established');
+      
+      // Return unsubscribe function
+      return () => {
+        console.log('🔌 Unsubscribing from transaction monitoring');
+        subscription.removeAllListeners();
+      };
+    } catch (error) {
+      console.error('Error setting up transaction monitoring:', error);
+      throw error;
+    }
   }
 } 

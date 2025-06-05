@@ -10,7 +10,7 @@ export class App {
   constructor() {
     // Initialize services that don't depend on dynamic data from server
     this.nfcService = new NFCService(); 
-  }
+}
 
   /**
    * Initialize core services like price caching and start NFC listeners.
@@ -31,7 +31,7 @@ export class App {
     if (!this.nfcService) {
         console.error('NFC Service not initialized in App!');
         return { success: false, message: 'NFC Service not ready', errorType: 'NFC_SERVICE_ERROR' };
-    }
+        }
     console.log(`App: Processing payment for $${amount}`);
     return this.nfcService.armForPaymentAndAwaitTap(amount);
   }
@@ -63,7 +63,7 @@ process.on('SIGTERM', () => {
   app.stopServices();
   process.exit(0);
 });
-
+      
 // Start the app
 app.initializeServices().catch(error => {
   console.error('❌ Failed to start application:', error);
