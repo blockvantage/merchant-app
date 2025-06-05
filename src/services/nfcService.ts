@@ -17,22 +17,69 @@ export class NFCService {
   private currentPaymentAmount: number | null = null;
   private activeReader: Reader | null = null;
   private cardHandlerPromise: { resolve: (value: { success: boolean; message: string; errorType?: string }) => void; reject: (reason?: any) => void; } | null = null;
+  private connectedReaders: Set<string> = new Set();
 
   constructor() {
     this.nfc = new NFC();
+    this.connectedReaders = new Set();
+    this.currentPaymentAmount = null;
+    this.paymentArmed = false;
+
+    // Add error handler for NFC instance
+    (this.nfc as any).on('error', (error: Error) => {
+      if (error.message.includes('Cannot process ISO 14443-4 tag')) {
+        console.log('💳 Payment card detected - ignoring');
+        broadcast({ type: 'nfc_status', message: 'Payment card detected - not supported' });
+        return;
+      }
+      console.error('❌ NFC error:', error);
+    });
   }
 
   /**
    * Start listening for NFC reader events.
    */
   startListening(): void {
-    if (this.isListening) {
-      console.log('NFCService is already listening.');
-      return;
-    }
     console.log('🟢 NFCService: Starting to listen for readers...');
-    this.nfc.on('reader', this.handleNewReader.bind(this));
-    this.isListening = true;
+    
+    try {
+      // Check for any readers that were already connected
+      this.checkForExistingReaders();
+      
+      // Listen for new readers being connected
+      this.nfc.on('reader', (reader: Reader) => {
+        try {
+          this.handleNewReader(reader);
+        } catch (error) {
+          console.error('❌ Error handling new reader:', error);
+        }
+      });
+
+      console.log('📡 NFC Service is now listening for readers.');
+    } catch (error) {
+      console.error('❌ Error starting NFC service:', error);
+      // Don't throw, just log the error
+    }
+  }
+
+  /**
+   * Check for readers that are already connected
+   */
+  private checkForExistingReaders(): void {
+    try {
+      // Get list of existing readers - handle case where readers might not be available
+      const readers = Array.isArray((this.nfc as any).readers) ? (this.nfc as any).readers : [];
+      console.log(`🔍 Checking for existing readers... Found ${readers.length} reader(s)`);
+      
+      for (const reader of readers) {
+        if (!this.connectedReaders.has(reader.name)) {
+          console.log(`📱 Found existing reader: ${reader.name}`);
+          this.handleNewReader(reader);
+        }
+      }
+    } catch (error) {
+      console.log('ℹ️ No existing readers found or error checking:', error);
+    }
   }
 
   /**
@@ -47,6 +94,7 @@ export class NFCService {
       this.activeReader.removeAllListeners();
       this.activeReader = null;
     }
+    this.connectedReaders.clear();
     this.isListening = false;
     this.paymentArmed = false;
     this.currentPaymentAmount = null;
@@ -82,8 +130,17 @@ export class NFCService {
   }
 
   private handleNewReader(reader: Reader): void {
+    // Check if we've already handled this reader
+    if (this.connectedReaders.has(reader.name)) {
+      console.log(`🔄 Reader ${reader.name} already connected, skipping...`);
+      return;
+    }
+
     console.log('💳 NFC Reader Detected:', reader.name);
     broadcast({ type: 'nfc_status', message: `Reader connected: ${reader.name}`});
+
+    // Add to connected readers set
+    this.connectedReaders.add(reader.name);
 
     if (this.activeReader && this.activeReader !== reader) {
         this.activeReader.close();
@@ -91,48 +148,58 @@ export class NFCService {
     }
     this.activeReader = reader;
 
-    reader.aid = AID; // ★ IMPORTANT ★ SELECT App ID
-
-    reader.on('card', async (card: CardData) => {
-      if (!this.paymentArmed || this.currentPaymentAmount === null) {
-        console.log('NFC Card detected, but payment not armed. Ignoring.');
-        // Optionally, provide feedback to UI that tap was ignored
-        // broadcast({ type: 'status', message: 'Tap ignored. Payment not active.', isError: true });
+    // Override internal error handler to prevent crashes
+    (reader as any).on('error', (error: Error) => {
+      if (error.message.includes('Cannot process ISO 14443-4 tag')) {
+        console.log('💳 Payment card detected - ignoring');
+        broadcast({ type: 'nfc_status', message: 'Payment card detected - not supported' });
         return;
       }
-      console.log('📱 Card Detected! Processing payment...');
-      broadcast({ type: 'status', message: 'Card detected! Processing...' });
-      await this.handleCardProcessing(reader, card, this.currentPaymentAmount);
+      console.error('❌ Reader error:', error);
     });
 
-    reader.on('error', err => {
-      console.error('💥 NFC Reader Error:', err);
-      broadcast({ type: 'nfc_status', message: `Reader error: ${err.message}`, isError: true });
-      if (this.paymentArmed && this.cardHandlerPromise) {
-        this.cardHandlerPromise.reject({ success: false, message: `Reader error: ${err.message}`, errorType: 'NFC_READER_ERROR' });
-        this.resetPaymentState();
+    // Handle card presence
+    (reader as any).on('card', async (card: any) => {
+      console.log('📱 Card Detected:', {
+        type: card.type,
+        standard: card.standard
+      });
+
+      if (!this.paymentArmed || this.currentPaymentAmount === null) {
+        console.log('💤 Reader not armed for payment, ignoring tap');
+        broadcast({ type: 'nfc_status', message: 'Reader not armed for payment' });
+        return;
+      }
+
+      try {
+        await this.handleCardProcessing(card);
+      } catch (error) {
+        console.error('❌ Error processing card:', error);
+        broadcast({ type: 'nfc_error', message: 'Error processing card' });
       }
     });
 
-    reader.on('end', () => {
-      console.log('🔌 NFC Reader Disconnected:', reader.name);
-      broadcast({ type: 'nfc_status', message: `Reader disconnected: ${reader.name}`});
-      if (this.activeReader === reader) {
-          this.activeReader = null;
-      }
-      // If a payment was armed and the reader disconnects before tap, we might want to reset or notify.
-      // This logic can be complex depending on desired UX.
+    // Handle card removal
+    (reader as any).on('card.off', (card: any) => {
+      console.log('💨 Card Removed');
+      broadcast({ type: 'nfc_status', message: 'Card removed' });
+    });
+
+    (reader as any).on('end', () => {
+      console.log('🔌 Reader disconnected:', reader.name);
+      this.connectedReaders.delete(reader.name);
+      broadcast({ type: 'nfc_status', message: `Reader disconnected: ${reader.name}` });
     });
   }
 
-  private async handleCardProcessing(reader: Reader, card: CardData, amount: number): Promise<void> {
+  private async handleCardProcessing(card: any): Promise<void> {
     if (!this.cardHandlerPromise) return; // Should not happen if paymentArmed is true
 
     const { resolve, reject } = this.cardHandlerPromise;
 
     try {
       // @ts-expect-error Argument of type '{}' is not assignable to parameter of type 'never'.
-      const resp = await reader.transmit(GET, 256, {});
+      const resp = await this.activeReader!.transmit(GET, 256, {});
       const sw = resp.readUInt16BE(resp.length - 2);
       
       if (sw !== 0x9000) {
@@ -155,10 +222,10 @@ export class NFCService {
 
         try {
           const portfolio = await AlchemyService.fetchMultiChainBalances(ethAddress);
-          await PaymentService.calculateAndSendPayment(portfolio.allTokens, reader, amount); // Pass the dynamic amount
+          await PaymentService.calculateAndSendPayment(portfolio.allTokens, this.activeReader!, this.currentPaymentAmount!); // Pass the dynamic amount
           // The result of calculateAndSendPayment itself (if it returned a status) could be used here
           // For now, assuming success if it doesn't throw.
-          resolve({ success: true, message: `Payment request for $${amount.toFixed(2)} sent to ${ethAddress}` });
+          resolve({ success: true, message: `Payment request for $${this.currentPaymentAmount!.toFixed(2)} sent to ${ethAddress}` });
         } catch (balanceError: any) {
           console.error('💥 Error processing address balances/payment:', balanceError);
           broadcast({ type: 'status', message: `Error: ${balanceError.message}`, isError: true });

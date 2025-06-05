@@ -1,5 +1,5 @@
 import { Reader } from 'nfc-pcsc';
-import { PAYMENT, RECIPIENT_ADDRESS, TARGET_USD, SUPPORTED_CHAINS } from '../config/index.js';
+import { PAYMENT, RECIPIENT_ADDRESS, SUPPORTED_CHAINS } from '../config/index.js';
 import { TokenWithPrice } from '../types/index.js';
 import { EthereumService } from './ethereumService.js';
 
@@ -126,18 +126,18 @@ export class PaymentService {
   /**
    * Calculate payment options and send payment request
    */
-  static async calculateAndSendPayment(tokensWithPrices: TokenWithPrice[], reader: Reader): Promise<void> {
-    // Filter tokens that have sufficient balance for TARGET_USD payment
+  static async calculateAndSendPayment(tokensWithPrices: TokenWithPrice[], reader: Reader, targetUSD: number): Promise<void> {
+    // Filter tokens that have sufficient balance for targetUSD payment
     const viableTokens = tokensWithPrices.filter(token => 
-      token.priceUSD > 0 && token.valueUSD >= TARGET_USD
+      token.priceUSD > 0 && token.valueUSD >= targetUSD
     );
 
     if (viableTokens.length === 0) {
-      console.log(`\n❌ No tokens found with sufficient balance for $${TARGET_USD} payment`);
+      console.log(`\n❌ No tokens found with sufficient balance for $${targetUSD} payment`);
       return;
     }
 
-    console.log(`\n💰 PAYMENT OPTIONS ($${TARGET_USD}):`);
+    console.log(`\n💰 PAYMENT OPTIONS ($${targetUSD}):`);
     
     // Group by chain for better display
     const tokensByChain = viableTokens.reduce((acc, token) => {
@@ -152,7 +152,7 @@ export class PaymentService {
     Object.entries(tokensByChain).forEach(([chainName, tokens]) => {
       console.log(`\n⛓️  ${chainName}:`);
       tokens.forEach(token => {
-        const requiredAmount = TARGET_USD / token.priceUSD;
+        const requiredAmount = targetUSD / token.priceUSD;
         console.log(`  ${optionIndex}. ${requiredAmount.toFixed(6)} ${token.symbol}`);
         optionIndex++;
       });
@@ -160,7 +160,7 @@ export class PaymentService {
 
     // Smart payment selection: prefer stablecoins, then native tokens, then others
     const selectedToken = this.selectBestPaymentToken(viableTokens);
-    const requiredAmount = TARGET_USD / selectedToken.priceUSD;
+    const requiredAmount = targetUSD / selectedToken.priceUSD;
     
     console.log(`\n🎯 Selected: ${requiredAmount.toFixed(6)} ${selectedToken.symbol} (${selectedToken.chainDisplayName})`);
     

@@ -349,6 +349,8 @@
 
     <!-- NFC Status Screens -->
     <div class="nfc-screen" id="nfcScreen">
+        <div class="spinner"></div>
+        <div class="checkmark" style="display: none;"></div>
         <div class="nfc-icon">📱</div>
         <div class="nfc-message">Tap Phone to Pay</div>
         <div class="nfc-amount" id="nfcAmount">$0.00</div>
@@ -490,7 +492,10 @@
             nfcAmount.textContent = '$0.00';
             spinner.style.display = 'block';
             checkmark.style.display = 'none';
-            currentAmount = 0;
+            
+            // Reset processing state
+            isProcessing = false;
+            updateDoneButton();
         }
 
         // Initialize WebSocket connection
@@ -563,83 +568,49 @@
         }
 
         function retryPayment() {
-            document.getElementById('errorScreen').style.display = 'none';
-            document.getElementById('nfcScreen').style.display = 'flex';
-            
-            // Restart NFC payment process
-            initiateNFCPayment(currentAmount);
+            // Reset error state and try again
+            isProcessing = false;
+            startPayment();
         }
 
         function newTransaction() {
             // Reset everything
             isProcessing = false;
             clearAmount();
-            
-            // Hide all screens
-            document.getElementById('successScreen').style.display = 'none';
-            document.getElementById('errorScreen').style.display = 'none';
-            document.getElementById('nfcScreen').style.display = 'none';
-        }
-
-        function showError() {
-            document.getElementById('nfcScreen').style.display = 'none';
-            document.getElementById('errorScreen').style.display = 'flex';
-        }
-
-        function showSuccess() {
-            document.getElementById('nfcScreen').style.display = 'none';
-            document.getElementById('successAmount').textContent = '$' + currentAmount.toFixed(2);
-            document.getElementById('successScreen').style.display = 'flex';
+            resetUI();
         }
 
         async function initiateNFCPayment(amount) {
             try {
-                const response = await fetch('/api/start-payment', {
+                // Use a default merchant address - in production, this would come from settings
+                const merchantAddress = '0x109F7f0bFE98E4d1352916056FDcd90b9547ba00';
+                
+                const response = await fetch('/initiate-payment', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ amount: amount })
+                    body: JSON.stringify({ 
+                        amount: amount,
+                        merchantAddress: merchantAddress
+                    })
                 });
 
                 if (!response.ok) {
-                    throw new Error('Failed to start payment');
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Failed to start payment');
                 }
 
-                // Poll for payment status
-                pollPaymentStatus();
+                const result = await response.json();
+                console.log('Payment initiated:', result);
                 
             } catch (error) {
                 console.error('Payment initiation failed:', error);
-                showError();
+                showError(error.message || 'Payment failed to start');
             }
         }
 
-        async function pollPaymentStatus() {
-            try {
-                const response = await fetch('/api/payment-status');
-                const data = await response.json();
-                
-                switch (data.status) {
-                    case 'waiting':
-                        // Continue polling
-                        setTimeout(pollPaymentStatus, 1000);
-                        break;
-                    case 'success':
-                        showSuccess();
-                        break;
-                    case 'error':
-                        showError();
-                        break;
-                    case 'timeout':
-                        showError();
-                        break;
-                }
-            } catch (error) {
-                console.error('Status polling failed:', error);
-                showError();
-            }
-        }
+
 
         // Initialize display
         updateDisplay();

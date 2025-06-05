@@ -168,6 +168,19 @@ const initiatePaymentHandler: AsyncRequestHandler = async (req, res) => {
 // HTTP endpoint to initiate payment
 expressApp.post('/initiate-payment', initiatePaymentHandler);
 
+// Add global error handlers
+process.on('uncaughtException', (error) => {
+    if (error.message.includes('Cannot process ISO 14443-4 tag')) {
+        console.log('💳 Payment card detected - ignoring');
+        return;
+    }
+    console.error('❌ Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
 // Start the main application logic (NFC, Price Cache)
 async function startServerAndApp() {
     try {
