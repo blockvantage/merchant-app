@@ -1,0 +1,103 @@
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: #007aff; /* iOS Blue */
+    color: white;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    height: 100vh;
+    margin: 0;
+    padding: 20px;
+    box-sizing: border-box;
+    text-align: center;
+}
+
+.container {
+    width: 100%;
+    max-width: 320px; /* Optimized for ~5" screen width */
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    height: 100%;
+}
+
+.status-bar {
+    font-size: 1.5em; /* Increased for visibility */
+    font-weight: bold;
+    padding: 15px;
+    border-radius: 10px;
+    background-color: rgba(0, 0, 0, 0.1);
+    margin-bottom: 20px;
+    min-height: 60px; /* Ensure space for messages */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1.3;
+}
+
+.status-bar.error {
+    background-color: #ff3b30; /* iOS Red for errors */
+    color: white;
+}
+
+.amount-display {
+    font-size: 3.5em; /* Significantly larger for amount */
+    font-weight: bold;
+    background-color: rgba(255, 255, 255, 0.2);
+    padding: 20px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    min-height: 80px; /* Ensure space for large numbers */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.number-pad {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 15px; /* Increased gap for touch */
+    margin-bottom: 20px;
+}
+
+.number-pad button {
+    font-size: 2.5em; /* Larger font for numbers */
+    padding: 20px;
+    border: none;
+    border-radius: 10px;
+    background-color: rgba(255, 255, 255, 0.3);
+    color: white;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.number-pad button:active {
+    background-color: rgba(255, 255, 255, 0.5);
+}
+
+.done-button {
+    font-size: 2em; /* Larger font for action button */
+    padding: 25px;
+    width: 100%;
+    border: none;
+    border-radius: 10px;
+    background-color: #34c759; /* iOS Green */
+    color: white;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.done-button:disabled {
+    background-color: #8e8e93; /* iOS Gray for disabled */
+    cursor: not-allowed;
+}
+
+.done-button:active:not(:disabled) {
+    background-color: #2aa248;
+}
+
+.hidden {
+    display: none;
+} 
