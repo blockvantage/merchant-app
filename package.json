@@ -1,9 +1,10 @@
 {
   "name": "osxreader",
   "version": "1.0.0",
+  "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node --loader ts-node/esm src/reader-nfcpcsc.ts"
   },
   "keywords": [],
   "author": "",
@@ -15,6 +16,7 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
+    "dotenv": "^16.5.0",
     "nfc-pcsc": "^0.8.1",
     "pcsclite": "^1.0.1"
   }
