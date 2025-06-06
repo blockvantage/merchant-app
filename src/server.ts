@@ -43,7 +43,23 @@ interface PaymentSession {
     timeout: NodeJS.Timeout;
 }
 
+// Store transaction history
+interface TransactionRecord {
+    id: string;
+    amount: number;
+    fromAddress?: string;
+    toAddress: string;
+    chainId: number;
+    chainName: string;
+    tokenSymbol?: string;
+    txHash?: string;
+    explorerUrl?: string;
+    status: 'detected' | 'confirmed' | 'failed';
+    timestamp: number;
+}
+
 const activePayments = new Map<string, PaymentSession>();
+const transactionHistory: TransactionRecord[] = [];
 
 // WebSocket connection handling
 wss.on('connection', (ws) => {
@@ -133,10 +149,34 @@ async function monitorTransaction(merchantAddress: string, amount: number, chain
                 });
                 console.log(`🔗 View transaction: ${explorerUrl}`);
                 
+                // Create transaction record
+                const transactionRecord: TransactionRecord = {
+                    id: `${tx.hash}-${Date.now()}`,
+                    amount: tx.value / 1e18, // Convert wei to ETH for display
+                    fromAddress: tx.from,
+                    toAddress: tx.to,
+                    chainId,
+                    chainName,
+                    tokenSymbol: 'ETH', // TODO: Detect actual token symbol
+                    txHash: tx.hash,
+                    explorerUrl,
+                    status: 'detected',
+                    timestamp: Date.now()
+                };
+                
                 // Verify transaction amount matches expected amount
                 if (tx.value >= amount) {
                     console.log(`✅ Payment confirmed! Received ${tx.value / 1e18} ETH (≥ $${amount} wei required) for ${merchantAddress} on ${chainName}`);
                     console.log(`🔗 View on block explorer: ${explorerUrl}`);
+                    
+                    transactionRecord.status = 'confirmed';
+                    transactionHistory.unshift(transactionRecord);
+                    
+                    // Keep only last 500 transactions
+                    if (transactionHistory.length > 500) {
+                        transactionHistory.splice(500);
+                    }
+                    
                     clearTimeout(timeout);
                     activePayments.delete(merchantAddress);
                     broadcast({ 
@@ -145,10 +185,24 @@ async function monitorTransaction(merchantAddress: string, amount: number, chain
                         transactionHash: tx.hash,
                         amount: tx.value,
                         chainName,
-                        chainId
+                        chainId,
+                        transaction: transactionRecord
                     });
                 } else {
                     console.log(`⚠️ Transaction amount too small: ${tx.value / 1e18} ETH (${tx.value} wei) < ${amount} wei required on ${chainName}`);
+                    
+                    transactionRecord.status = 'failed';
+                    transactionHistory.unshift(transactionRecord);
+                    
+                    // Keep only last 500 transactions
+                    if (transactionHistory.length > 500) {
+                        transactionHistory.splice(500);
+                    }
+                    
+                    broadcast({
+                        type: 'transaction_detected',
+                        transaction: transactionRecord
+                    });
                 }
             }, 
             chainId,
@@ -276,6 +330,47 @@ const initiatePaymentHandler: AsyncRequestHandler = async (req, res) => {
 
 // HTTP endpoint to initiate payment
 expressApp.post('/initiate-payment', initiatePaymentHandler);
+
+// Endpoint to get transaction history
+expressApp.get('/transaction-history', (req, res) => {
+    res.json(transactionHistory);
+});
+
+// Endpoint to scan wallet for history filtering
+const scanWalletHandler: AsyncRequestHandler = async (req, res) => {
+    try {
+        console.log('📱 Starting wallet scan for transaction history...');
+        broadcast({ type: 'status', message: 'Tap wallet to view history...' });
+        
+        // Use NFC to scan for wallet address
+        const scanResult = await nfcApp.scanWalletAddress();
+        
+        if (scanResult.success && scanResult.address) {
+            console.log(`✅ Wallet scanned successfully: ${scanResult.address}`);
+            broadcast({ 
+                type: 'wallet_scanned', 
+                address: scanResult.address,
+                message: `Wallet found: ${scanResult.address.slice(0, 6)}...${scanResult.address.slice(-4)}`
+            });
+            res.json({ success: true, address: scanResult.address });
+        } else {
+            console.log(`❌ Wallet scan failed: ${scanResult.message}`);
+            broadcast({ 
+                type: 'status', 
+                message: scanResult.message || 'Failed to scan wallet', 
+                isError: true 
+            });
+            res.status(400).json({ success: false, message: scanResult.message });
+        }
+    } catch (error: any) {
+        console.error('Error in wallet scan:', error);
+        const errorMessage = error.message || 'Failed to scan wallet';
+        broadcast({ type: 'status', message: errorMessage, isError: true });
+        res.status(500).json({ success: false, message: errorMessage });
+    }
+};
+
+expressApp.post('/scan-wallet', scanWalletHandler);
 
 // Debug endpoint to check supported chains and active subscriptions
 expressApp.get('/debug/chains', (req, res) => {

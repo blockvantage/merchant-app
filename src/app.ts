@@ -37,6 +37,19 @@ export class App {
   }
 
   /**
+   * Scan an NFC device to get wallet address for transaction history filtering.
+   * @returns Promise resolving with scan result containing wallet address.
+   */
+  async scanWalletAddress(): Promise<{ success: boolean; message: string; address?: string; errorType?: string }> {
+    if (!this.nfcService) {
+        console.error('NFC Service not initialized in App!');
+        return { success: false, message: 'NFC Service not ready', errorType: 'NFC_SERVICE_ERROR' };
+    }
+    console.log('App: Starting wallet address scan');
+    return this.nfcService.scanForWalletAddress();
+  }
+
+  /**
    * Stop core services gracefully.
    */
   stopServices(): void {

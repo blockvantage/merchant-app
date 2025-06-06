@@ -13,9 +13,12 @@ import { broadcast } from '../server.js';
 export class NFCService {
   private nfc: NFC;
   private paymentArmed: boolean = false;
+  private walletScanArmed: boolean = false;
   private currentPaymentAmount: number | null = null;
   private cardHandlerPromise: Promise<{ success: boolean; message: string; errorType?: string; paymentInfo?: any }> | null = null;
   private cardHandlerResolve: ((result: { success: boolean; message: string; errorType?: string; paymentInfo?: any }) => void) | null = null;
+  private walletScanPromise: Promise<{ success: boolean; message: string; address?: string; errorType?: string }> | null = null;
+  private walletScanResolve: ((result: { success: boolean; message: string; address?: string; errorType?: string }) => void) | null = null;
 
   constructor() {
     this.nfc = new NFC();
@@ -67,9 +70,9 @@ export class NFCService {
       standard: card.standard
     });
 
-    if (!this.paymentArmed || this.currentPaymentAmount === null) {
-      console.log('💤 Reader not armed for payment, ignoring tap');
-      broadcast({ type: 'nfc_status', message: 'Reader not armed for payment' });
+    if (!this.paymentArmed && !this.walletScanArmed) {
+      console.log('💤 Reader not armed for payment or wallet scan, ignoring tap');
+      broadcast({ type: 'nfc_status', message: 'Reader not armed' });
       return;
     }
 
@@ -85,7 +88,11 @@ export class NFCService {
       const phoneResponse = resp.slice(0, -2).toString();
       console.log('📱 Phone says →', phoneResponse);
       
-      await this.processPhoneResponse(phoneResponse, reader, this.currentPaymentAmount);
+      if (this.walletScanArmed) {
+        await this.processWalletScan(phoneResponse, reader);
+      } else if (this.paymentArmed && this.currentPaymentAmount !== null) {
+        await this.processPhoneResponse(phoneResponse, reader, this.currentPaymentAmount);
+      }
       
     } catch (e) {
       console.error('❌ Error processing card:', e);
@@ -207,6 +214,78 @@ export class NFCService {
     this.currentPaymentAmount = null;
     this.cardHandlerPromise = null;
     this.cardHandlerResolve = null;
+  }
+
+  /**
+   * Process wallet address scan response
+   */
+  private async processWalletScan(phoneResponse: string, reader: Reader): Promise<void> {
+    // Check if the response is an Ethereum address
+    if (EthereumService.isEthereumAddress(phoneResponse)) {
+      const ethAddress = EthereumService.normalizeEthereumAddress(phoneResponse);
+      console.log(`✓ Wallet address scanned: ${ethAddress}`);
+      
+      if (this.walletScanResolve) {
+        this.walletScanResolve({ 
+          success: true, 
+          message: `Wallet scanned successfully`,
+          address: ethAddress
+        });
+        this.walletScanResolve = null;
+      }
+    } else {
+      console.log('📱 Response is not an Ethereum address');
+      if (this.walletScanResolve) {
+        this.walletScanResolve({ 
+          success: false, 
+          message: 'Invalid Ethereum address', 
+          errorType: 'INVALID_ADDRESS' 
+        });
+        this.walletScanResolve = null;
+      }
+    }
+  }
+
+  /**
+   * Scan for wallet address (for transaction history filtering)
+   */
+  public async scanForWalletAddress(): Promise<{ success: boolean; message: string; address?: string; errorType?: string }> {
+    this.walletScanArmed = true;
+    console.log('🔍 NFCService: Armed for wallet address scan. Waiting for tap...');
+    
+    // Create a promise that will be resolved when a wallet is scanned
+    this.walletScanPromise = new Promise((resolve) => {
+      this.walletScanResolve = resolve;
+    });
+
+    // Set a timeout for the scan (30 seconds)
+    const timeoutId = setTimeout(() => {
+      if (this.walletScanResolve) {
+        this.walletScanResolve({ success: false, message: 'Wallet scan timeout', errorType: 'TIMEOUT' });
+        this.walletScanResolve = null;
+      }
+      this.disarmWalletScan();
+    }, 30000);
+
+    try {
+      const result = await this.walletScanPromise;
+      clearTimeout(timeoutId);
+      this.disarmWalletScan();
+      return result;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      this.disarmWalletScan();
+      return { success: false, message: 'Wallet scan processing error', errorType: 'PROCESSING_ERROR' };
+    }
+  }
+
+  /**
+   * Disarm the wallet scan service
+   */
+  private disarmWalletScan(): void {
+    this.walletScanArmed = false;
+    this.walletScanPromise = null;
+    this.walletScanResolve = null;
   }
 
   /**
