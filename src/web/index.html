@@ -318,10 +318,7 @@
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h1>💳 Payment Terminal</h1>
-            <p>Enter amount and tap to pay</p>
-        </div>
+
 
         <div class="display-section">
             <div class="amount-display" id="amountDisplay">$0.00</div>
@@ -343,7 +340,7 @@
         </div>
 
         <button class="done-button" id="doneButton" onclick="startPayment()">
-            💰 Charge Customer
+            Charge
         </button>
     </div>
 
@@ -351,7 +348,6 @@
     <div class="nfc-screen" id="nfcScreen">
         <div class="spinner"></div>
         <div class="checkmark" style="display: none;"></div>
-        <div class="nfc-icon">📱</div>
         <div class="nfc-message">Tap Phone to Pay</div>
         <div class="nfc-amount" id="nfcAmount">$0.00</div>
         <div class="nfc-submessage">
@@ -444,11 +440,19 @@
 
         function showPaymentApproved() {
             const nfcScreen = document.getElementById('nfcScreen');
+            const nfcMessage = nfcScreen.querySelector('.nfc-message');
+            const nfcAmount = nfcScreen.querySelector('.nfc-amount');
+            const nfcSubmessage = nfcScreen.querySelector('.nfc-submessage');
             const spinner = nfcScreen.querySelector('.spinner');
             const checkmark = nfcScreen.querySelector('.checkmark');
             
             nfcScreen.classList.remove('waiting-payment', 'error');
             nfcScreen.classList.add('payment-approved');
+            
+            // Update the message to "Approved" and hide everything else
+            nfcMessage.textContent = 'Approved';
+            nfcAmount.style.display = 'none';
+            nfcSubmessage.style.display = 'none';
             
             spinner.style.display = 'none';
             checkmark.style.display = 'block';
@@ -484,12 +488,15 @@
         function resetUI() {
             const nfcScreen = document.getElementById('nfcScreen');
             const nfcAmount = document.getElementById('nfcAmount');
+            const nfcSubmessage = nfcScreen.querySelector('.nfc-submessage');
             const spinner = nfcScreen.querySelector('.spinner');
             const checkmark = nfcScreen.querySelector('.checkmark');
             
             nfcScreen.style.display = 'none';
             nfcScreen.classList.remove('error', 'waiting-payment', 'payment-approved');
             nfcAmount.textContent = '$0.00';
+            nfcAmount.style.display = 'block'; // Show amount for next transaction
+            nfcSubmessage.style.display = 'block'; // Show submessage for next transaction
             spinner.style.display = 'block';
             checkmark.style.display = 'none';
             
