@@ -334,7 +334,7 @@
             <button class="key" onclick="addDigit('7')">7</button>
             <button class="key" onclick="addDigit('8')">8</button>
             <button class="key" onclick="addDigit('9')">9</button>
-            <button class="key decimal" onclick="addDecimal()">.</button>
+            <button class="key decimal" onclick="addDecimal()" style="opacity: 0.3; cursor: not-allowed;" disabled>.</button>
             <button class="key" onclick="addDigit('0')">0</button>
             <button class="key clear" onclick="clearAmount()">Clear</button>
         </div>
@@ -508,16 +508,16 @@
         // Initialize WebSocket connection
         connectWebSocket();
 
-        let hasDecimal = false;
-        let decimalPlaces = 0;
+        let currentCents = 0; // Track amount in cents
         let isProcessing = false;
 
         function updateDisplay() {
             const display = document.getElementById('amountDisplay');
+            currentAmount = currentCents / 100; // Convert cents to dollars for other functions
             const formatted = '$' + currentAmount.toFixed(2);
             display.textContent = formatted;
             
-            if (currentAmount > 0) {
+            if (currentCents > 0) {
                 display.classList.add('has-value');
             } else {
                 display.classList.remove('has-value');
@@ -528,35 +528,31 @@
 
         function updateDoneButton() {
             const button = document.getElementById('doneButton');
-            button.disabled = currentAmount <= 0 || isProcessing;
+            button.disabled = currentCents <= 0 || isProcessing;
         }
 
         function addDigit(digit) {
             if (isProcessing) return;
             
-            if (hasDecimal) {
-                if (decimalPlaces < 2) {
-                    currentAmount = currentAmount + (parseInt(digit) / Math.pow(10, decimalPlaces + 2));
-                    decimalPlaces++;
-                }
-            } else {
-                currentAmount = currentAmount * 10 + parseInt(digit);
-            }
+            // Prevent amounts over $999.99 (99999 cents)
+            if (currentCents >= 99999) return;
+            
+            // Add digit to cents (shift left and add new digit)
+            currentCents = currentCents * 10 + parseInt(digit);
             
             updateDisplay();
         }
 
         function addDecimal() {
-            if (isProcessing || hasDecimal) return;
-            hasDecimal = true;
-            decimalPlaces = 0;
+            // Decimal functionality not needed since we work in cents
+            // This button can be disabled or repurposed
+            return;
         }
 
         function clearAmount() {
             if (isProcessing) return;
+            currentCents = 0;
             currentAmount = 0;
-            hasDecimal = false;
-            decimalPlaces = 0;
             updateDisplay();
         }
 
