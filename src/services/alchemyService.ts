@@ -61,6 +61,23 @@ export class AlchemyService {
   }
 
   /**
+   * Generate block explorer URL for a transaction hash on the given chain
+   */
+  private static getBlockExplorerUrl(chainId: number, txHash: string): string {
+    const explorerMap: {[key: number]: string} = {
+      1: 'https://etherscan.io/tx/',               // Ethereum
+      8453: 'https://basescan.org/tx/',            // Base  
+      42161: 'https://arbiscan.io/tx/',            // Arbitrum
+      10: 'https://optimistic.etherscan.io/tx/',   // Optimism
+      137: 'https://polygonscan.com/tx/',          // Polygon
+      393402133025423: 'https://starkscan.co/tx/' // Starknet
+    };
+    
+    const baseUrl = explorerMap[chainId];
+    return baseUrl ? `${baseUrl}${txHash}` : `https://etherscan.io/tx/${txHash}`;
+  }
+
+  /**
    * Map chain IDs to Alchemy Network enums
    */
   private static getAlchemyNetwork(chainId: number): Network | null {
@@ -433,6 +450,8 @@ export class AlchemyService {
             const valueInWei = parseInt(transaction.value?.toString() || '0', 16);
             const valueInEth = valueInWei / 1e18;
             
+            const explorerUrl = AlchemyService.getBlockExplorerUrl(chainId, transaction.hash);
+            
             console.log(`🔔 Transaction detected on ${chainConfig.displayName}:`, {
               hash: transaction.hash,
               from: transaction.from,
@@ -440,6 +459,7 @@ export class AlchemyService {
               value: `${valueInEth} ETH (${valueInWei} wei)`,
               blockNumber: transaction.blockNumber
             });
+            console.log(`🔗 View transaction: ${explorerUrl}`);
 
             // Check minimum value requirement
             if (minimumValueWei > 0 && valueInWei < minimumValueWei) {
@@ -451,6 +471,7 @@ export class AlchemyService {
             const receipt = await alchemy.core.getTransactionReceipt(transaction.hash);
             if (receipt && receipt.status === 1) {
               console.log(`✅ Transaction confirmed on ${chainConfig.displayName}: ${transaction.hash}`);
+              console.log(`🔗 View on block explorer: ${explorerUrl}`);
               console.log(`💎 Payment details: ${valueInEth} ETH from ${transaction.from} to ${transaction.to}`);
               
               callback({
@@ -603,10 +624,14 @@ export class AlchemyService {
                 const valueInWei = parseInt(tx.value, 16);
                 
                 if (valueInWei >= minimumValue) {
+                  const txHash = tx.transaction_hash || tx.hash;
+                  const explorerUrl = AlchemyService.getBlockExplorerUrl(chainConfig.id, txHash);
+                  
                   console.log(`✅ Starknet payment found! Value: ${valueInWei} wei`);
+                  console.log(`🔗 View on block explorer: ${explorerUrl}`);
                   
                   const transaction: Transaction = {
-                    hash: tx.transaction_hash || tx.hash,
+                    hash: txHash,
                     value: valueInWei,
                     from: tx.from || tx.sender_address,
                     to: tx.to || tx.contract_address
@@ -683,6 +708,8 @@ export class AlchemyService {
             addresses: [{ to: merchantAddress }]
           }, (tx: any) => {
             try {
+              const explorerUrl = AlchemyService.getBlockExplorerUrl(chainId, tx.hash);
+              
               console.log(`🔍 Transaction detected on ${chainName}:`, {
                 hash: tx.hash,
                 from: tx.from,
@@ -691,11 +718,13 @@ export class AlchemyService {
                 valueInWei: typeof tx.value === 'string' ? parseInt(tx.value, 16) : tx.value,
                 minimumRequired: minimumValue
               });
+              console.log(`🔗 View transaction: ${explorerUrl}`);
 
               const valueInWei = typeof tx.value === 'string' ? parseInt(tx.value, 16) : Number(tx.value);
               
               if (valueInWei >= minimumValue) {
                 console.log(`✅ Payment received on ${chainName}! Value: ${valueInWei} wei (${valueInWei / 1e18} ${chainConfig.nativeToken.symbol})`);
+                console.log(`🔗 View on block explorer: ${explorerUrl}`);
                 
                 const transaction: Transaction = {
                   hash: tx.hash,

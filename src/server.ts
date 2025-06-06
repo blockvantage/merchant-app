@@ -105,6 +105,22 @@ async function monitorTransaction(merchantAddress: string, amount: number, chain
         const unsubscribe = await AlchemyService.monitorTransactions(
             merchantAddress, 
             async (tx) => {
+                // Generate block explorer URL
+                const getBlockExplorerUrl = (chainId: number, txHash: string): string => {
+                    const explorerMap: {[key: number]: string} = {
+                        1: 'https://etherscan.io/tx/',
+                        8453: 'https://basescan.org/tx/',
+                        42161: 'https://arbiscan.io/tx/',
+                        10: 'https://optimistic.etherscan.io/tx/',
+                        137: 'https://polygonscan.com/tx/',
+                        393402133025423: 'https://starkscan.co/tx/'
+                    };
+                    const baseUrl = explorerMap[chainId];
+                    return baseUrl ? `${baseUrl}${txHash}` : `https://etherscan.io/tx/${txHash}`;
+                };
+                
+                const explorerUrl = getBlockExplorerUrl(chainId, tx.hash);
+                
                 console.log(`📝 Transaction detected for ${merchantAddress} on ${chainName}:`, {
                     hash: tx.hash,
                     value: tx.value,
@@ -115,15 +131,17 @@ async function monitorTransaction(merchantAddress: string, amount: number, chain
                     chainId,
                     chainName
                 });
+                console.log(`🔗 View transaction: ${explorerUrl}`);
                 
                 // Verify transaction amount matches expected amount
                 if (tx.value >= amount) {
                     console.log(`✅ Payment confirmed! Received ${tx.value / 1e18} ETH (≥ $${amount} wei required) for ${merchantAddress} on ${chainName}`);
+                    console.log(`🔗 View on block explorer: ${explorerUrl}`);
                     clearTimeout(timeout);
                     activePayments.delete(merchantAddress);
                     broadcast({ 
                         type: 'transaction_confirmed', 
-                        message: `Payment confirmed on ${chainName}!`,
+                        message: `Approved`,
                         transactionHash: tx.hash,
                         amount: tx.value,
                         chainName,
