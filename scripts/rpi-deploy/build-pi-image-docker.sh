@@ -324,6 +324,8 @@ ln -sf "/etc/systemd/system/wifi-connect.service" "$MOUNT_ROOT/etc/systemd/syste
 ln -sf "/etc/systemd/system/nfc-terminal.service" "$MOUNT_ROOT/etc/systemd/system/multi-user.target.wants/"
 ln -sf "/etc/systemd/system/display-setup.service" "$MOUNT_ROOT/etc/systemd/system/graphical.target.wants/"
 ln -sf "/etc/systemd/system/start-gui.service" "$MOUNT_ROOT/etc/systemd/system/graphical.target.wants/"
+ln -sf "/etc/systemd/system/start-gui.service" "$MOUNT_ROOT/etc/systemd/system/multi-user.target.wants/"
+ln -sf "/etc/systemd/system/boot-debug.service" "$MOUNT_ROOT/etc/systemd/system/graphical.target.wants/"
 
 # Remove the systemd-based chromium service - we'll use X11 auto-start instead
 rm -f "$MOUNT_ROOT/etc/systemd/system/chromium-kiosk.service" 2>/dev/null || true
@@ -366,18 +368,14 @@ dtparam=audio=on
 dtoverlay=ads7846,cs=1,penirq=25,penirq_pull=2,speed=50000,keep_vref_on=1,swapxy=1,pmax=255,xohms=150,xmin=200,xmax=3900,ymin=200,ymax=3900
 DISPLAY_CONFIG
 
-# Configure auto-login for freepay user
-echo "👤 Configuring auto-login and display manager..."
-mkdir -p "$MOUNT_ROOT/etc/systemd/system/getty@tty1.service.d"
-cat > "$MOUNT_ROOT/etc/systemd/system/getty@tty1.service.d/autologin.conf" << AUTOLOGIN_CONFIG
-[Service]
-ExecStart=
-ExecStart=-/sbin/agetty --autologin freepay --noclear %I \$TERM
-AUTOLOGIN_CONFIG
-
-# Disable lightdm (display manager) since we want direct X11
+# Disable display manager and getty on tty1 (we'll use systemd service instead)
+echo "👤 Configuring display manager and console..."
 mkdir -p "$MOUNT_ROOT/etc/systemd/system"
 ln -sf /dev/null "$MOUNT_ROOT/etc/systemd/system/lightdm.service"
+ln -sf /dev/null "$MOUNT_ROOT/etc/systemd/system/gdm3.service"
+ln -sf /dev/null "$MOUNT_ROOT/etc/systemd/system/sddm.service"
+# Disable getty on tty1 so our GUI service can take over
+ln -sf /dev/null "$MOUNT_ROOT/etc/systemd/system/getty@tty1.service"
 
 # Install systemd services from pre-built config files
 echo "⚙️  Installing systemd services..."
@@ -439,9 +437,8 @@ cp /build/build/app-bundle/config/udev/rules.d/10-wifi-unblock.rules "$MOUNT_ROO
 
 # WiFi unblock service already installed above with other services
 
-# Create userconf file to set default user password (prevents user setup wizard)
-# Password hash for 'freepay' - generated with: echo 'freepay' | openssl passwd -6 -stdin
-echo 'freepay:$6$rounds=656000$YQiWRlWWQtNRDEKd$4wLLbMstV8WRnksIm6EBTt5DkmLrIqf3d4TtqQKdg3.Pn4rBfKNOw0CZgQlGWqtHn6GKxJJr7k4OEAF6Lk4iP.' > "$MOUNT_BOOT/userconf"
+# Don't create userconf file - we'll create users manually in chroot
+# The userconf mechanism isn't working properly, so we'll disable it completely
 
 # Fix cmdline.txt - don't append, replace to avoid corruption
 if [ -f "$MOUNT_BOOT/cmdline.txt" ]; then
@@ -452,13 +449,18 @@ else
     echo "console=serial0,115200 console=tty1 root=PARTUUID=xxxxxxxx-02 rootfstype=ext4 elevator=deadline fsck.repair=yes rootwait" > "$MOUNT_BOOT/cmdline.txt"
 fi
 
-# Disable initial setup
-touch "$MOUNT_ROOT/etc/systemd/system/firstboot.service"
+# Disable all first-boot setup services
+echo "🚫 Disabling first-boot setup services..."
+ln -sf /dev/null "$MOUNT_ROOT/etc/systemd/system/userconfig.service"
+ln -sf /dev/null "$MOUNT_ROOT/etc/systemd/system/regenerate_ssh_host_keys.service"
+ln -sf /dev/null "$MOUNT_ROOT/etc/systemd/system/firstboot.service"
+ln -sf /dev/null "$MOUNT_ROOT/etc/systemd/system/apply_noobs_os_config.service"
+
+# Create a stub firstboot service that does nothing
 cat > "$MOUNT_ROOT/etc/systemd/system/firstboot.service" << FIRSTBOOT_SERVICE
 [Unit]
-Description=First boot setup
+Description=Disabled first boot setup
 After=systemd-user-sessions.service
-Before=getty@tty1.service
 
 [Service]
 Type=oneshot
@@ -509,7 +511,7 @@ echo "Updating package lists..."
 apt-get update || { echo "ERROR: apt-get update failed"; exit 1; }
 
 echo "Installing Node.js repository..."
-curl -fsSL https://deb.nodesource.com/setup_18.x | bash - || { echo "ERROR: Node.js repository setup failed"; exit 1; }
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash - || { echo "ERROR: Node.js repository setup failed"; exit 1; }
 
 echo "Installing core packages..."
 # Install packages in smaller groups to avoid dependency conflicts
@@ -678,6 +680,28 @@ echo "Setting up SSH user..."
 echo "Setting up freepay user..."
 /tmp/setup-freepay-user.sh
 
+# Also create the user manually to ensure it exists
+echo "Double-checking freepay user creation..."
+if ! id freepay &>/dev/null; then
+    echo "Creating freepay user as fallback..."
+    useradd -m -s /bin/bash -u 1000 -G sudo,plugdev,dialout,video,audio,input,tty,users freepay || true
+    echo "freepay:freepay" | chpasswd || true
+    mkdir -p /home/freepay
+    chown -R freepay:freepay /home/freepay
+    chmod 755 /home/freepay
+    echo "Freepay user created as fallback"
+fi
+
+# Verify user exists
+echo "Verifying freepay user..."
+id freepay || echo "ERROR: freepay user not found!"
+
+# Remove any existing user configuration that might conflict
+echo "Cleaning up user configuration conflicts..."
+rm -f /etc/xdg/autostart/piwiz.desktop 2>/dev/null || true
+rm -f /usr/share/applications/piwiz.desktop 2>/dev/null || true
+rm -f /etc/xdg/autostart/wifi-country.desktop 2>/dev/null || true
+
 echo "Disabling first-boot wizard and setup..."
 # Disable the user configuration wizard
 systemctl disable userconfig 2>/dev/null || true
@@ -699,6 +723,14 @@ echo "Configuring SSH service..."
 systemctl unmask ssh.service 2>/dev/null || true
 systemctl unmask sshd.service 2>/dev/null || true
 
+# Configure SSH for password authentication
+echo "Configuring SSH for password authentication..."
+sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config
+sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+sed -i 's/#AuthorizedKeysFile/AuthorizedKeysFile/' /etc/ssh/sshd_config
+
 # Generate SSH host keys if they don't exist
 ssh-keygen -A || echo "SSH key generation completed"
 
@@ -713,7 +745,7 @@ echo "Enabling other services..."
 # Set graphical target as default
 systemctl set-default graphical.target 2>/dev/null || true
 
-systemctl enable pcscd wifi-unblock wifi-connect nfc-terminal display-setup start-gui dhcpcd 2>/dev/null || {
+systemctl enable pcscd wifi-unblock wifi-connect nfc-terminal display-setup start-gui boot-debug dhcpcd 2>/dev/null || {
     echo "WARNING: Some services could not be enabled, will try manual linking"
     # Manual service enabling as fallback
     ln -sf /etc/systemd/system/pcscd.service /etc/systemd/system/multi-user.target.wants/ 2>/dev/null || true

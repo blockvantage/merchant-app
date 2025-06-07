@@ -307,8 +307,9 @@ EOF
 cat > build/app-bundle/config/start-gui.service << 'EOF'
 [Unit]
 Description=Start GUI for NFC Terminal
-After=nfc-terminal.service multi-user.target
+After=multi-user.target nfc-terminal.service
 Wants=nfc-terminal.service
+Before=getty@tty1.service
 Conflicts=getty@tty1.service
 
 [Service]
@@ -319,18 +320,20 @@ Environment=HOME=/home/freepay
 Environment=DISPLAY=:0
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 WorkingDirectory=/home/freepay
-ExecStartPre=/bin/mkdir -p /run/user/1000
-ExecStartPre=/bin/chown freepay:freepay /run/user/1000
-ExecStart=/usr/bin/xinit /home/freepay/start-kiosk.sh -- :0 vt7 -keeptty
+ExecStartPre=/bin/bash -c 'echo "Waiting for freepay user..."; for i in {1..60}; do if id freepay &>/dev/null; then echo "freepay user found: $(id freepay)"; break; else echo "Waiting for freepay user ($i/60)"; sleep 1; fi; done; if ! id freepay &>/dev/null; then echo "ERROR: freepay user not found after 60 seconds"; exit 1; fi'
+ExecStartPre=/bin/bash -c 'echo "Setting up runtime directory..."; mkdir -p /run/user/1000; chown freepay:freepay /run/user/1000; chmod 700 /run/user/1000'
+ExecStartPre=/bin/bash -c 'echo "Verifying home directory..."; ls -la /home/freepay || (echo "ERROR: /home/freepay not found"; exit 1)'
+ExecStartPre=/bin/bash -c 'echo "Starting X11 server for freepay user..."'
+ExecStart=/usr/bin/xinit /home/freepay/start-kiosk.sh -- :0 vt1 -keeptty
 Restart=always
-RestartSec=10
+RestartSec=20
 StandardOutput=journal
 StandardError=journal
 KillMode=mixed
 TimeoutStopSec=30
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target graphical.target
 EOF
 
 # Create WiFi unblock service
@@ -348,6 +351,21 @@ RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
+EOF
+
+# Create a simple diagnostic service to help debug boot issues
+cat > build/app-bundle/config/boot-debug.service << 'EOF'
+[Unit]
+Description=Boot Debug Service
+After=graphical.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'sleep 15; echo "=== Boot Debug $(date) ===" > /tmp/boot-debug.log; echo "Freepay User Check:" >> /tmp/boot-debug.log; id freepay >> /tmp/boot-debug.log 2>&1 || echo "freepay user not found" >> /tmp/boot-debug.log; echo "Home Directory:" >> /tmp/boot-debug.log; ls -la /home/ >> /tmp/boot-debug.log; echo "Runtime Directory:" >> /tmp/boot-debug.log; ls -la /run/user/ >> /tmp/boot-debug.log 2>&1 || echo "no /run/user/" >> /tmp/boot-debug.log; echo "Failed Services:" >> /tmp/boot-debug.log; systemctl list-units --failed >> /tmp/boot-debug.log; echo "GUI Service Status:" >> /tmp/boot-debug.log; systemctl status start-gui.service >> /tmp/boot-debug.log 2>&1; echo "GUI Service Logs:" >> /tmp/boot-debug.log; journalctl -u start-gui.service --no-pager -n 20 >> /tmp/boot-debug.log 2>&1; echo "=== End Debug ===" >> /tmp/boot-debug.log'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical.target
 EOF
 
 # Create kiosk startup script
@@ -555,7 +573,7 @@ echo "🔧 Manual Test Commands:"
 echo ""
 echo "To test GUI manually:"
 echo "1. Stop the service: sudo systemctl stop start-gui.service"
-echo "2. Test X11 manually: sudo -u freepay DISPLAY=:0 xinit /home/freepay/start-kiosk.sh -- :0 vt7"
+echo "2. Test X11 manually: sudo -u freepay DISPLAY=:0 xinit /home/freepay/start-kiosk.sh -- :0 vt1"
 echo "3. Or test kiosk script: sudo -u freepay /home/freepay/start-kiosk.sh"
 echo ""
 echo "To see live logs:"
@@ -591,16 +609,12 @@ sleep 3
 EOF
 chmod +x build/app-bundle/config/xinitrc
 
-# Create .bashrc append for freepay user
+# Create .bashrc append for freepay user (minimal - using systemd service for GUI)
 echo "📝 Creating bashrc configuration..."
 cat > build/app-bundle/config/bashrc-append << 'EOF'
 
-# Auto-start X11 on login for display :0
-if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ] && [ -z "$X11_STARTED" ]; then
-    echo "Starting X11 session..."
-    export X11_STARTED=1
-    exec startx
-fi
+# freepay user configuration
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
 EOF
 
 # Create X11 input configuration for 5" touchscreen
@@ -676,36 +690,103 @@ chmod +x build/app-bundle/config/setup-ssh-user.sh
 # Freepay user setup script
 cat > build/app-bundle/config/setup-freepay-user.sh << 'EOF'
 #!/bin/bash
-set -e
-
 echo "Setting up main freepay user..."
 
-# Create the freepay user if it doesn't exist
-if ! id "freepay" &>/dev/null; then
-    useradd -m -s /bin/bash "freepay"
-    echo "User freepay created"
-else
-    echo "User freepay already exists"
+# Function to safely create user
+create_freepay_user() {
+    # Kill any processes by existing freepay user
+    pkill -u freepay 2>/dev/null || true
+    sleep 1
+    
+    # Remove existing freepay user if it exists
+    if id freepay &>/dev/null; then
+        echo "Removing existing freepay user..."
+        userdel -r freepay 2>/dev/null || userdel -f freepay 2>/dev/null || true
+    fi
+    
+    # Check if UID 1000 is taken by another user
+    if getent passwd 1000 &>/dev/null; then
+        existing_user=$(getent passwd 1000 | cut -d: -f1)
+        if [ "$existing_user" != "freepay" ]; then
+            echo "UID 1000 taken by $existing_user, removing..."
+            pkill -u "$existing_user" 2>/dev/null || true
+            sleep 1
+            userdel -r "$existing_user" 2>/dev/null || userdel -f "$existing_user" 2>/dev/null || true
+        fi
+    fi
+    
+    # Create freepay user with UID 1000
+    echo "Creating freepay user with UID 1000..."
+    if useradd -m -s /bin/bash -u 1000 -U freepay; then
+        echo "✅ freepay user created successfully"
+    else
+        echo "❌ Failed to create with UID 1000, trying alternative..."
+        # Try without specific UID as fallback
+        if useradd -m -s /bin/bash -U freepay; then
+            echo "✅ freepay user created with auto-assigned UID"
+        else
+            echo "❌ Failed to create freepay user"
+            return 1
+        fi
+    fi
+}
+
+# Attempt user creation
+if ! create_freepay_user; then
+    echo "❌ Failed to create freepay user, exiting"
+    exit 1
 fi
 
-# Set password
-echo "freepay:freepay" | chpasswd
-echo "Password set for freepay"
+# Set password - try multiple methods for reliability
+echo "Setting password for freepay..."
+if echo "freepay:freepay" | chpasswd; then
+    echo "✅ Password set via chpasswd"
+elif printf "freepay\nfreepay\n" | passwd freepay; then
+    echo "✅ Password set via passwd"
+else
+    echo "❌ Failed to set password"
+fi
 
-# Add user to essential groups
-usermod -aG sudo freepay
-usermod -aG plugdev freepay
-usermod -aG dialout freepay
-usermod -aG video freepay
-usermod -aG audio freepay
-usermod -aG input freepay
-usermod -aG tty freepay
+# Add to groups
+echo "Adding freepay to essential groups..."
+for group in sudo plugdev dialout video audio input tty users; do
+    if getent group "$group" &>/dev/null; then
+        usermod -aG "$group" freepay && echo "✅ Added to $group" || echo "❌ Failed to add to $group"
+    else
+        echo "⚠️  Group $group does not exist"
+    fi
+done
 
-# Set proper ownership of home directory
-chown -R freepay:freepay /home/freepay
+# Setup directories
+echo "Setting up directories..."
+mkdir -p /home/freepay
+chown -R freepay:freepay /home/freepay 2>/dev/null || echo "❌ Failed to set home ownership"
 chmod 755 /home/freepay
 
-echo "Freepay user setup completed successfully"
+# Setup runtime directory for X11
+user_id=$(id -u freepay 2>/dev/null || echo "1000")
+mkdir -p "/run/user/$user_id"
+chown freepay:freepay "/run/user/$user_id" 2>/dev/null || echo "❌ Failed to set runtime dir ownership"
+chmod 700 "/run/user/$user_id"
+
+# Add to sudoers for passwordless sudo
+echo "Setting up sudo access..."
+mkdir -p /etc/sudoers.d
+echo "freepay ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/freepay
+chmod 440 /etc/sudoers.d/freepay
+
+# Verify setup
+echo "Verifying freepay user setup..."
+if id freepay &>/dev/null; then
+    echo "✅ User info: $(id freepay)"
+    echo "✅ Groups: $(groups freepay)"
+    echo "✅ Home: $(ls -ld /home/freepay 2>/dev/null || echo 'not found')"
+    echo "✅ Runtime: $(ls -ld /run/user/$user_id 2>/dev/null || echo 'not found')"
+    echo "✅ Freepay user setup completed successfully"
+else
+    echo "❌ ERROR: freepay user verification failed"
+    exit 1
+fi
 EOF
 chmod +x build/app-bundle/config/setup-freepay-user.sh
 
