@@ -676,6 +676,12 @@
             
             // Clear the timeout
             if (paymentTimeout) clearTimeout(paymentTimeout);
+            
+            // Return to main screen after 5 seconds
+            setTimeout(() => {
+                nfcScreen.style.display = 'none';
+                resetUI();
+            }, 5000);
         }
 
         function resetUI() {
