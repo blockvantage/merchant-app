@@ -3,3 +3,5 @@ dist/
 .env
 server.log
 working-nfc-service.ts
+build-config.env
+build/

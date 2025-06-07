@@ -249,6 +249,19 @@ Custom Raspberry Pi OS Image
 4. **Kiosk Mode**: Boots directly to fullscreen NFC terminal
 5. **Hardware Support**: 7" touchscreen and NFC reader ready
 
+### Issues Encountered and Resolved:
+
+**🔧 macOS Compatibility Issue**: 
+- **Problem**: Original build script failed due to `fdisk -l` syntax differences on macOS and lack of ext2/ext4 filesystem support
+- **Root Cause**: macOS uses BSD fdisk with different options, and cannot mount Linux filesystems natively
+- **Solution**: Created `build-pi-image-docker.sh` that runs the entire build process in an Ubuntu Docker container
+- **Result**: Full macOS compatibility maintained with Linux build environment
+
+### Files Updated:
+- `build/fdisk-util.sh` - Added macOS-compatible disk utilities with hdiutil
+- `build-pi-image-docker.sh` - Complete Docker-based build script for macOS
+- `README-DEPLOYMENT.md` - Added macOS compatibility section and troubleshooting
+
 ### Ready for Testing Phase
 
 ## Lessons Learned
