@@ -383,21 +383,32 @@ RemainAfterExit=yes
 WantedBy=graphical.target
 EOF
 
-# Create kiosk startup script
+# Create kiosk startup script (enhanced with complete portrait mode support)
 echo "🖥️  Creating kiosk startup script..."
 cat > build/app-bundle/config/start-kiosk.sh << 'EOF'
 #!/bin/bash
-echo "Starting NFC Terminal Kiosk GUI..."
+echo "🖥️ Starting NFC Terminal Kiosk Mode..."
 
-# Wait a moment for X11 to initialize
-sleep 3
+# Set display for portrait mode (90 degrees clockwise)
+export DISPLAY=:0
+
+# Wait for X server to be ready
+echo "⏳ Waiting for X server..."
+for i in {1..30}; do
+    if xdpyinfo >/dev/null 2>&1; then
+        echo "✅ X server is ready"
+        break
+    fi
+    echo "Waiting for X server ($i/30)..."
+    sleep 1
+done
 
 # Wait for NFC terminal service to be ready
-echo "Waiting for NFC terminal service..."
+echo "⏳ Waiting for NFC terminal service..."
 timeout=120
 while [ $timeout -gt 0 ]; do
     if curl -f http://localhost:3000 > /dev/null 2>&1; then
-        echo "NFC terminal service ready"
+        echo "✅ NFC terminal service ready"
         break
     fi
     echo "NFC terminal not ready, waiting... ($timeout seconds left)"
@@ -406,7 +417,7 @@ while [ $timeout -gt 0 ]; do
 done
 
 if [ $timeout -le 0 ]; then
-    echo "ERROR: NFC terminal service not available after 2 minutes"
+    echo "❌ ERROR: NFC terminal service not available after 2 minutes"
     # Show an error page instead of exiting
     echo "<html><body><h1>NFC Terminal Starting...</h1><p>Please wait while the service initializes.</p></body></html>" > /tmp/loading.html
     chromium-browser --kiosk --no-sandbox file:///tmp/loading.html &
@@ -419,25 +430,36 @@ if [ $timeout -le 0 ]; then
     fi
 fi
 
-# Set up display
+# Configure display rotation (90 degrees counterclockwise for portrait)
+echo "🔄 Setting up portrait display rotation..."
+xrandr --output HDMI-1 --rotate left 2>/dev/null || \
+xrandr --output HDMI-2 --rotate left 2>/dev/null || \
+xrandr --output HDMI-A-1 --rotate left 2>/dev/null || \
+echo "Display rotation not applied (may be configured at boot level)"
+
+# Configure touchscreen for portrait mode (no inversion)
+echo "👆 Configuring touchscreen..."
+xinput set-prop "ADS7846 Touchscreen" "Coordinate Transformation Matrix" 0 -1 1 1 0 0 0 0 1 2>/dev/null || \
+echo "Touchscreen transformation not applied (device may not be present)"
+
+# Set up display power management
+echo "⚡ Configuring display settings..."
 xset -dpms
 xset s off  
 xset s noblank
 
-# Rotate display for portrait mode (90 degrees clockwise)
-xrandr --output HDMI-1 --rotate right 2>/dev/null || xrandr --output HDMI-A-1 --rotate right 2>/dev/null || echo "Display rotation applied at boot level"
-
 # Hide cursor
+echo "🖱️ Hiding mouse cursor..."
 unclutter -idle 1 &
 
-echo "Starting Chromium kiosk mode..."
+echo "🌐 Starting Chromium in kiosk mode..."
 exec chromium-browser \
     --kiosk \
     --no-sandbox \
     --disable-infobars \
     --disable-session-crashed-bubble \
     --disable-restore-session-state \
-    --disable-features=TranslateUI \
+    --disable-features=TranslateUI,VizDisplayCompositor \
     --no-first-run \
     --fast \
     --fast-start \
@@ -447,6 +469,8 @@ exec chromium-browser \
     --disable-background-timer-throttling \
     --disable-renderer-backgrounding \
     --disable-device-discovery-notifications \
+    --disable-suggestions-service \
+    --disable-save-password-bubble \
     --autoplay-policy=no-user-gesture-required \
     --disable-dev-shm-usage \
     --disable-extensions \
@@ -455,6 +479,7 @@ exec chromium-browser \
     --allow-running-insecure-content \
     --touch-events=enabled \
     --enable-features=TouchpadAndWheelScrollLatching \
+    --start-fullscreen \
     http://localhost:3000
 EOF
 chmod +x build/app-bundle/config/start-kiosk.sh
@@ -468,8 +493,8 @@ echo "=============================================="
 echo "This script helps calibrate your 5\" touchscreen in portrait mode."
 echo ""
 echo "Current configuration:"
-echo "- Display: Portrait mode (90° clockwise rotation)"
-echo "- Touch rotation: Configured with transformation matrix"
+echo "- Display: Portrait mode (90° counterclockwise rotation)"
+echo "- Touch rotation: Configured with transformation matrix (no inversion)"
 echo ""
 echo "Touch configuration files:"
 echo "- Hardware config: /boot/config.txt (ads7846 overlay)"
@@ -482,9 +507,9 @@ echo "3. Follow the on-screen instructions"
 echo "4. Update values in X11 config if needed"
 echo ""
 echo "Portrait mode settings:"
-echo "- TransformationMatrix: \"0 1 0 -1 0 1 0 0 1\""
+echo "- TransformationMatrix: \"0 -1 1 1 0 0 0 0 1\""
 echo "- SwapAxes: enabled"
-echo "- InvertY: enabled for clockwise portrait"
+echo "- InvertX: disabled, InvertY: disabled (no inversion)"
 echo ""
 echo "Current hardware configuration:"
 grep "ads7846" /boot/config.txt || echo "No ads7846 configuration found"
@@ -643,29 +668,48 @@ echo ""
 EOF
 chmod +x build/app-bundle/config/debug-gui.sh
 
-# Create .xinitrc for X11 startup
+# Create .xinitrc for X11 startup (enhanced with complete portrait mode support)
 echo "🪟 Creating .xinitrc..."
 cat > build/app-bundle/config/xinitrc << 'EOF'
 #!/bin/bash
+echo "🪟 Starting X11 session with portrait mode..."
+
+# Set display
+export DISPLAY=:0
+
 # Disable screen saver and power management
+echo "⚡ Configuring display power management..."
 xset -dpms
 xset s off
 xset s noblank
 
-# Rotate display for portrait mode (90 degrees clockwise)
-xrandr --output HDMI-1 --rotate right 2>/dev/null || xrandr --output HDMI-A-1 --rotate right 2>/dev/null || echo "Display rotation applied at boot level"
+# Configure display rotation (90 degrees counterclockwise for portrait)
+echo "🔄 Setting up portrait display rotation..."
+xrandr --output HDMI-1 --rotate left 2>/dev/null || \
+xrandr --output HDMI-2 --rotate left 2>/dev/null || \
+xrandr --output HDMI-A-1 --rotate left 2>/dev/null || \
+echo "Display rotation not applied (may be configured at boot level)"
+
+# Configure touchscreen for portrait mode (no inversion)
+echo "👆 Configuring touchscreen transformation..."
+xinput set-prop "ADS7846 Touchscreen" "Coordinate Transformation Matrix" 0 -1 1 1 0 0 0 0 1 2>/dev/null || \
+echo "Touchscreen transformation not applied (device may not be present)"
 
 # Hide cursor after 1 second of inactivity
+echo "🖱️ Hiding mouse cursor..."
 unclutter -idle 1 &
 
 # Start window manager
+echo "🪟 Starting window manager..."
 openbox-session &
 
-# Wait for window manager
+# Wait for window manager to initialize
+echo "⏳ Waiting for window manager..."
 sleep 3
 
 # Start the kiosk application
-/home/freepay/start-kiosk.sh
+echo "🚀 Launching kiosk application..."
+exec /home/freepay/start-kiosk.sh
 EOF
 chmod +x build/app-bundle/config/xinitrc
 
@@ -687,8 +731,8 @@ Section "InputClass"
     Option "Calibration" "200 3900 200 3900"
     Option "SwapAxes" "1"
     Option "InvertX" "false"
-    Option "InvertY" "true"
-    Option "TransformationMatrix" "0 1 0 -1 0 1 0 0 1"
+    Option "InvertY" "false"
+    Option "TransformationMatrix" "0 -1 1 1 0 0 0 0 1"
 EndSection
 
 Section "InputClass"
@@ -696,7 +740,7 @@ Section "InputClass"
     MatchIsTouchscreen "on"
     MatchDevicePath "/dev/input/event*"
     Driver "evdev"
-    Option "TransformationMatrix" "0 1 0 -1 0 1 0 0 1"
+    Option "TransformationMatrix" "0 -1 1 1 0 0 0 0 1"
 EndSection
 EOF
 

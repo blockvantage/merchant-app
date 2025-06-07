@@ -493,7 +493,7 @@ dtparam=spi=on
 dtparam=audio=on
 
 # Display rotation: 90 degrees clockwise (portrait mode)
-display_rotate=1  # 90 degrees clockwise
+display_rotate=3  # 90 degrees counterclockwise
 
 # Touch screen calibration (may need adjustment for your specific display)
 # These values are typical for 5" 800x480 displays but may need fine-tuning
