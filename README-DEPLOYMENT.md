@@ -9,7 +9,7 @@ This guide explains how to create a bootable Raspberry Pi image with your NFC pa
 - Docker Desktop (for macOS builds)
 - 32GB+ MicroSD card
 - Raspberry Pi 4B
-- 7" touchscreen display
+- 5" HDMI LCD touchscreen display (800x480)
 - ACR1252U - USB NFC Reader III (P/N: ACR1252U-M1)
 
 ### 1. Navigate to Deployment Scripts
@@ -40,6 +40,11 @@ WIFI_PASSWORD="YourWiFiPassword"
 ALCHEMY_API_KEY="your_alchemy_api_key_here"
 MERCHANT_ETH_ADDRESS="0x1234567890123456789012345678901234567890"  # YOUR ACTUAL ADDRESS
 
+# SSH Access Configuration (optional - defaults shown)
+SSH_USERNAME="freepay"              # Default: freepay
+SSH_PASSWORD="freepay"              # Default: freepay  
+SSH_ENABLE_PASSWORD_AUTH="true"     # Enable SSH password authentication
+
 # Supported Networks
 BLOCKCHAIN_NETWORKS="ethereum,base,arbitrum,optimism,polygon,starknet"
 ```
@@ -48,19 +53,27 @@ BLOCKCHAIN_NETWORKS="ethereum,base,arbitrum,optimism,polygon,starknet"
 
 ### 4. Build the Image
 
-**For macOS (Recommended):**
+**For macOS (Recommended - Simple):**
 ```bash
-# Uses Docker for Linux filesystem compatibility (takes 30-60 minutes)
+# Creates base image + manual completion guide (takes 5-10 minutes)
+./build-pi-image-simple.sh
+# Then follow the generated manual completion guide
+./complete-build-manual.sh
+```
+
+**For macOS (Advanced - Docker):**
+```bash
+# Uses Docker for full automation (takes 30-60 minutes, may have issues)
 ./build-pi-image-docker.sh
 ```
 
 **For Linux:**
 ```bash
-# Direct build (faster, but requires Linux)
+# Direct build (fastest, full automation)
 ./build-pi-image.sh
 ```
 
-> **Note**: macOS doesn't natively support ext2/ext4 filesystems used by Raspberry Pi OS. The Docker version provides a Linux environment for proper filesystem operations.
+> **Note**: macOS doesn't natively support ext2/ext4 filesystems. The simple approach creates everything needed and provides clear manual steps for SD card completion.
 
 ### 5. Flash and Deploy
 ```bash
@@ -181,6 +194,14 @@ When you power on the Pi with the flashed SD card:
 - Install Docker Desktop from https://docker.com/products/docker-desktop
 - Start Docker Desktop before running build
 
+**"docker-credential-desktop: executable file not found"**
+- Temporarily fix Docker credentials:
+```bash
+cp ~/.docker/config.json ~/.docker/config.json.backup
+# Edit ~/.docker/config.json and remove the "credsStore": "desktop" line
+# OR use the simple build approach: ./build-pi-image-simple.sh
+```
+
 **"Cannot download base image"**
 - Check internet connection
 - Verify disk space (need ~8GB free)
@@ -204,10 +225,16 @@ When you power on the Pi with the flashed SD card:
 
 ### Debug Access:
 
-SSH is enabled by default:
+SSH is enabled with custom user:
+```bash
+ssh freepay@<pi-ip-address>
+# Default password: freepay
+```
+
+The system also retains the default pi user:
 ```bash
 ssh pi@<pi-ip-address>
-# Default password: raspberry (change this!)
+# Default password: raspberry
 ```
 
 View service status:

@@ -5,3 +5,6 @@ server.log
 working-nfc-service.ts
 build-config.env
 build/
+*.img
+*.img.gz
+.DS_Store

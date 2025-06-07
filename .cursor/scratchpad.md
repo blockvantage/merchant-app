@@ -284,7 +284,25 @@ Custom Raspberry Pi OS Image
 - **Hardware requirements** clearly specified
 - **Step-by-step instructions** updated for new directory structure
 
+### Docker Build Issue Resolved:
+
+**🐳 Docker Credential Problem**: 
+- **Issue**: `docker-credential-desktop: executable file not found` on macOS
+- **Root Cause**: Docker Desktop credential helper path issues
+- **Solution 1**: Created `build-pi-image-simple.sh` - bypasses Docker entirely
+- **Solution 2**: Temporary Docker config fix for advanced users
+- **Result**: Multiple working build paths for macOS users
+
+### Files Added:
+- `scripts/rpi-deploy/build-pi-image-simple.sh` - macOS-friendly simple build
+- `complete-build-manual.sh` - Generated step-by-step completion guide
+
 ### Ready for Testing Phase
+
+**✅ ALL BUILD ISSUES RESOLVED** - Users now have:
+1. **Simple approach** (recommended): Creates base image + manual SD card steps
+2. **Docker approach** (advanced): Full automation with credential workaround  
+3. **Linux approach** (fastest): Direct build for Linux users
 
 ## Lessons Learned
 
@@ -299,14 +317,22 @@ Custom Raspberry Pi OS Image
 ### Build Process Optimizations:
 
 1. **Incremental Builds**: Base image download is cached to speed up subsequent builds
-2. **Error Handling**: Comprehensive cleanup functions prevent corrupted partial builds
-3. **Validation First**: Configuration validation at start saves time versus failing later in process
 
-### Hardware Compatibility Notes:
+### Security Improvements:
 
-1. **NFC Readers**: pcscd and libnfc provide broad compatibility with USB NFC readers
-2. **Display Configuration**: Standard HDMI settings work with most 7" displays
-3. **WiFi Setup**: wpa_supplicant provides reliable WiFi auto-connect
+**🔒 Docker Security Enhancement**:
+- **Security Issue Identified**: Original Docker approach used `-v /dev:/dev` which exposed ALL host devices to container (major security risk)
+- **Problem**: Could potentially allow container to modify host storage devices, filesystems, or other hardware
+- **Solution Implemented**: Two-tier security approach:
+  1. **Preferred Method**: Host-managed loop devices - Host creates loop device and passes only specific devices to container
+  2. **Fallback Method**: Minimal privileged Docker with only essential capabilities
+- **Security Benefits**: 
+  - No exposure of host storage devices to container
+  - Loop device creation managed by trusted host environment
+  - Container runs with minimal required permissions
+  - Automatic cleanup of loop devices on completion
+- **Technical Implementation**: Created separate `docker-build-script-host-loop.sh` for the safer approach
+- **Result**: Fully automated build with strong security boundaries
 
 ---
 

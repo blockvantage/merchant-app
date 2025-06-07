@@ -52,9 +52,8 @@ echo "⚙️  Creating systemd service file..."
 cat > build/app-bundle/config/nfc-terminal.service << 'EOF'
 [Unit]
 Description=NFC Payment Terminal
-After=network-online.target wifi-connect.service
+After=network-online.target
 Wants=network-online.target
-Requires=wifi-connect.service
 
 [Service]
 Type=simple
@@ -85,7 +84,8 @@ cat > build/app-bundle/config/wifi-connect.service << 'EOF'
 [Unit]
 Description=WiFi Connection Service
 Before=network-online.target
-After=systemd-networkd.service
+After=systemd-networkd.service wifi-unblock.service
+Wants=wifi-unblock.service
 
 [Service]
 Type=oneshot
