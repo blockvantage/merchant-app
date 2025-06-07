@@ -21,6 +21,23 @@ error_exit() {
     exit 1
 }
 
+# Enhanced error handling for filesystem operations
+handle_filesystem_error() {
+    local operation="$1"
+    local target="$2"
+    echo -e "${RED}❌ CRITICAL: Filesystem operation failed: $operation${NC}" >&2
+    echo -e "${RED}Target: $target${NC}" >&2
+    
+    # Attempt basic recovery
+    echo "🔧 Attempting recovery..."
+    sync
+    sleep 2
+    
+    echo -e "${RED}❌ BUILD FAILED: Filesystem corruption risk detected${NC}" >&2
+    echo -e "${RED}Please check your host system and try again${NC}" >&2
+    exit 1
+}
+
 success_msg() {
     echo -e "${GREEN}✅ $1${NC}"
 }
@@ -475,8 +492,8 @@ dtparam=spi=on
 # Audio
 dtparam=audio=on
 
-# Display rotation: 90 degrees counterclockwise (portrait mode)
-display_rotate=3  # 270 degrees = 90 degrees counterclockwise
+# Display rotation: 90 degrees clockwise (portrait mode)
+display_rotate=1  # 90 degrees clockwise
 
 # Touch screen calibration (may need adjustment for your specific display)
 # These values are typical for 5" 800x480 displays but may need fine-tuning
@@ -642,26 +659,173 @@ echo "Installing Node.js repository..."
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1 || { echo "ERROR: Failed to setup Node.js repository"; exit 1; }
 
 echo "Installing core packages..."
-# Install packages in smaller groups to avoid dependency conflicts
-apt-get install -y -qq \
-    nodejs \
-    chromium-browser \
-    openbox \
-    unclutter \
-    xserver-xorg \
-    xinit \
-    curl \
-    xrandr >/dev/null 2>&1 || { echo "ERROR: Failed to install core GUI packages (nodejs, chromium, openbox, xinit)"; exit 1; }
+# Fix package installation issues in Docker chroot environment
+
+# First, configure networking and DNS in chroot
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+
+# Update package cache with better error handling
+echo "Updating package cache (this may take a few minutes)..."
+export DEBIAN_FRONTEND=noninteractive
+export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+
+# Try multiple times with different sources
+for i in {1..3}; do
+    if apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30; then
+        echo "✅ Package cache updated successfully"
+        break
+    else
+        echo "⚠️ Package cache update attempt $i failed, retrying..."
+        sleep 5
+    fi
+done
+
+# Install SSH first (most critical for recovery)
+echo "Installing SSH server..."
+apt-get install -y openssh-server >/dev/null 2>&1 || echo "⚠️ SSH installation failed"
+
+# Install Node.js repository with timeout and retries
+echo "Installing Node.js repository..."
+NODEJS_REPO_SUCCESS=false
+for i in {1..2}; do
+    echo "NodeSource repository attempt $i..."
+    if timeout 180 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -; then
+        echo "✅ Node.js repository added successfully"
+        NODEJS_REPO_SUCCESS=true
+        break
+    else
+        echo "⚠️ Node.js repository setup attempt $i failed"
+        sleep 5
+    fi
+done
+
+if [ "$NODEJS_REPO_SUCCESS" = "false" ]; then
+    echo "⚠️ NodeSource repository setup failed completely"
+    echo "Will attempt to install Node.js from default Debian repositories later"
+fi
+
+# Install core packages in smaller groups with better error handling
+echo "Installing X11 and window manager..."
+# Install X11 packages individually for better error handling
+echo "Installing xinit..."
+apt-get install -y xinit || echo "⚠️ xinit failed"
+
+echo "Installing X11 server..."
+apt-get install -y xserver-xorg || echo "⚠️ xserver-xorg failed"
+
+echo "Installing openbox window manager..."
+apt-get install -y openbox || echo "⚠️ openbox failed"
+
+echo "Installing screen utilities..."
+apt-get install -y unclutter x11-xserver-utils || echo "⚠️ screen utilities failed"
+
+echo "Installing Chromium browser..."
+# Try multiple Chromium packages
+if apt-get install -y chromium-browser >/dev/null 2>&1; then
+    echo "✅ chromium-browser installed"
+elif apt-get install -y chromium >/dev/null 2>&1; then
+    echo "✅ chromium installed"
+    # Create symlink for compatibility
+    ln -sf /usr/bin/chromium /usr/bin/chromium-browser 2>/dev/null || true
+else
+    echo "⚠️ Chromium installation failed, trying alternative browsers..."
+    apt-get install -y firefox-esr >/dev/null 2>&1 || echo "⚠️ Firefox also failed"
+fi
+
+echo "Installing Node.js (if not already installed)..."
+if ! command -v node >/dev/null 2>&1; then
+    echo "Attempting to install Node.js from NodeSource repository..."
+    if apt-get install -y nodejs; then
+        echo "✅ Node.js installed from NodeSource"
+    else
+        echo "⚠️ NodeSource installation failed, trying default repository..."
+        # Update package cache again
+        apt-get update -qq
+        if apt-get install -y nodejs npm; then
+            echo "✅ Node.js installed from default repository"
+        else
+            echo "❌ All Node.js installation methods failed"
+        fi
+    fi
+else
+    echo "✅ Node.js already available"
+fi
+
+echo "Installing essential utilities..."
+apt-get install -y curl wget >/dev/null 2>&1 || echo "⚠️ Some utilities failed to install"
 
 echo "Verifying critical GUI packages..."
 # Verify essential GUI packages are installed
-for pkg in chromium-browser openbox unclutter xinit curl; do
-    if ! dpkg -l | grep -q "^ii.*$pkg"; then
-        echo "WARNING: Package $pkg may not be properly installed"
+CRITICAL_MISSING=false
+REQUIRED_PACKAGES=("xinit" "openbox")
+OPTIONAL_PACKAGES=("chromium-browser" "chromium" "firefox-esr")
+
+echo "Required packages to check: ${REQUIRED_PACKAGES[*]}"
+
+# Check required packages
+for pkg in "${REQUIRED_PACKAGES[@]}"; do
+    echo "Checking for package: $pkg"
+    if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii.*$pkg"; then
+        echo "✅ Required package $pkg verified"
     else
-        echo "✅ Package $pkg verified"
+        echo "❌ CRITICAL: Required package $pkg is missing"
+        # Show what packages are actually installed that match
+        echo "📋 Similar packages found:"
+        dpkg -l | grep -i "$pkg" || echo "   None found"
+        CRITICAL_MISSING=true
     fi
 done
+
+# Check for at least one browser
+BROWSER_FOUND=false
+for pkg in "${OPTIONAL_PACKAGES[@]}"; do
+    echo "Checking for browser: $pkg"
+    if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
+        echo "✅ Browser package $pkg found"
+        BROWSER_FOUND=true
+        break
+    fi
+done
+
+if [ "$BROWSER_FOUND" = "false" ]; then
+    echo "❌ CRITICAL: No browser found (chromium-browser, chromium, or firefox-esr)"
+    CRITICAL_MISSING=true
+fi
+
+# Check for Node.js
+if command -v node >/dev/null 2>&1; then
+    echo "✅ Node.js verified: $(node --version)"
+else
+    echo "⚠️ WARNING: Node.js not found - NFC terminal may not work"
+fi
+
+# Check for SSH
+echo "Checking for SSH server..."
+if dpkg -l openssh-server 2>/dev/null | grep -q "^ii"; then
+    echo "✅ SSH server verified"
+else
+    echo "⚠️ WARNING: SSH server not installed - remote access will not work"
+fi
+
+# If critical packages are missing, we should not continue with a broken image
+if [ "$CRITICAL_MISSING" = "true" ]; then
+    echo ""
+    echo "❌ CRITICAL ERROR: Essential packages are missing!"
+    echo "❌ The resulting image would not boot properly."
+    echo "❌ This is likely due to network issues during package installation."
+    echo ""
+    echo "🔧 SUGGESTED FIXES:"
+    echo "1. Check your internet connection and try again"
+    echo "2. Try building during off-peak hours (better mirror availability)"
+    echo "3. Use a different DNS server or network"
+    echo "4. Build the image manually on a Linux system instead of Docker"
+    echo ""
+    echo "❌ BUILD ABORTED to prevent creating a broken image"
+    exit 1
+fi
+
+echo "✅ Package verification completed - proceeding with build"
 
 echo "Installing X11 input packages..."
 apt-get install -y -qq \
@@ -881,12 +1045,6 @@ if ! id freepay &>/dev/null; then
 fi
 
 # Final ownership and permission fixes
-echo "Setting final file permissions and ownership..."
-chown -R freepay:freepay /opt/nfc-terminal 2>/dev/null || echo "⚠️  Failed to set NFC terminal ownership"
-mkdir -p /home/freepay
-chown -R freepay:freepay /home/freepay 2>/dev/null || echo "⚠️  Failed to set home directory ownership"
-chmod 755 /home/freepay
-
 echo "Setting up SSH user..."
 if /tmp/setup-ssh-user.sh; then
     echo "✅ SSH user setup completed successfully"
@@ -1162,21 +1320,82 @@ mkdir -p "$MOUNT_ROOT/var/lib/systemd" "$MOUNT_ROOT/etc/systemd/system" "$MOUNT_
 chown root:root "$MOUNT_ROOT" "$MOUNT_ROOT/etc" "$MOUNT_ROOT/usr" "$MOUNT_ROOT/var"
 
 # Final filesystem check and cleanup
-echo "🧹 Final cleanup..."
+echo "🧹 Final cleanup and filesystem integrity checks..."
+
+# Sync all pending writes
+sync
+sleep 2
 sync
 
-# Unmount filesystems gracefully
-umount "$MOUNT_BOOT" "$MOUNT_ROOT"
+# Check filesystem integrity before unmounting
+echo "🔍 Pre-unmount filesystem integrity check..."
+if ! e2fsck -n "$ROOT_DEV"; then
+    echo "⚠️ Filesystem errors detected, attempting repair..."
+    e2fsck -f -y "$ROOT_DEV" || {
+        echo "❌ CRITICAL: Filesystem repair failed"
+        echo "❌ BUILD FAILED: Image would be corrupted"
+        exit 1
+    }
+fi
 
-# Force filesystem check and mark as clean
-echo "🔍 Final filesystem check and cleanup..."
-e2fsck -f -y "$ROOT_DEV" || echo "Filesystem check completed"
-tune2fs -C 0 "$ROOT_DEV"  # Reset mount count to prevent forced checks
-tune2fs -T now "$ROOT_DEV"  # Set last check time to now
+# Unmount filesystems gracefully with multiple attempts
+echo "📤 Unmounting filesystems..."
+for i in {1..3}; do
+    if umount "$MOUNT_BOOT" 2>/dev/null; then
+        echo "✅ Boot partition unmounted"
+        break
+    else
+        echo "⚠️ Boot unmount attempt $i failed, retrying..."
+        sync
+        sleep 2
+    fi
+done
 
-# Ensure filesystem is marked as clean
-echo "✅ Marking filesystem as clean..."
-tune2fs -c 0 -i 0 "$ROOT_DEV"  # Disable periodic checks that can cause read-only mounts
+for i in {1..3}; do
+    if umount "$MOUNT_ROOT" 2>/dev/null; then
+        echo "✅ Root partition unmounted"
+        break
+    else
+        echo "⚠️ Root unmount attempt $i failed, retrying..."
+        sync
+        sleep 2
+        # Force unmount if necessary
+        if [ $i -eq 3 ]; then
+            umount -f "$MOUNT_ROOT" 2>/dev/null || umount -l "$MOUNT_ROOT"
+        fi
+    fi
+done
+
+# Verify unmount succeeded
+if mountpoint -q "$MOUNT_BOOT" || mountpoint -q "$MOUNT_ROOT"; then
+    echo "❌ CRITICAL: Failed to unmount filesystems properly"
+    echo "❌ BUILD FAILED: Risk of filesystem corruption"
+    exit 1
+fi
+
+# Final comprehensive filesystem check and repair
+echo "🔍 Final comprehensive filesystem check..."
+if ! e2fsck -f -y "$ROOT_DEV"; then
+    echo "❌ CRITICAL: Final filesystem check failed"
+    echo "❌ BUILD FAILED: Filesystem is corrupted"
+    exit 1
+fi
+
+# Ensure filesystem is healthy and marked clean
+echo "✅ Optimizing filesystem for clean boot..."
+tune2fs -C 0 "$ROOT_DEV"     # Reset mount count to prevent forced checks
+tune2fs -T now "$ROOT_DEV"   # Set last check time to now  
+tune2fs -c 0 -i 0 "$ROOT_DEV" # Disable periodic checks that can cause read-only mounts
+tune2fs -e continue "$ROOT_DEV" # Continue on errors instead of remounting read-only
+
+# Verify filesystem is marked clean
+if ! tune2fs -l "$ROOT_DEV" | grep -q "clean"; then
+    echo "❌ CRITICAL: Filesystem not marked as clean"
+    echo "❌ BUILD FAILED: Image would boot with filesystem errors"
+    exit 1
+fi
+
+echo "✅ Filesystem integrity verified and optimized"
 
 # Cleanup loop device and partitions
 if [ "$USE_KPARTX" = true ]; then
@@ -1285,4 +1504,5 @@ echo "   • Start the NFC terminal service automatically"
 echo "   • Launch fullscreen browser in kiosk mode"
 echo "   • Enable SSH access with user: $SSH_USERNAME"
 echo ""
-success_msg "Your NFC payment terminal image is ready for deployment!" 
+echo "🎉 SUCCESS!"
+echo "✅ Your NFC payment terminal image is ready for deployment!" 

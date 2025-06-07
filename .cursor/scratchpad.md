@@ -305,14 +305,17 @@ Custom Raspberry Pi OS Image
 - System boots directly to fullscreen NFC terminal interface
 
 **🖥️ Portrait Mode Display Support**:
-- **Problem**: User requested 90-degree counterclockwise rotation for vertical orientation
-- **Solution**: Added comprehensive display rotation configuration
+- **Problem**: User requested 90-degree rotation for vertical orientation
+- **Initial Solution**: Counterclockwise rotation with `display_rotate=3`
+- **Touchscreen Issue**: Touch coordinates didn't map correctly with counterclockwise rotation
+- **Final Solution**: Switched to clockwise rotation for better touchscreen compatibility
 - **Changes Made**:
-  - Boot-level rotation: `display_rotate=3` in `/boot/config.txt`
-  - X11 software rotation: `xrandr --rotate left` in GUI startup scripts
-  - Touch screen transformation: Updated X11 input configuration with proper transformation matrix
-  - Both `.xinitrc` and `start-kiosk.sh` updated with rotation commands
-- **Touch Configuration**: Added `TransformationMatrix "0 -1 1 1 0 0 0 0 1"` for portrait mode touch mapping
+  - Boot-level rotation: `display_rotate=1` (90° clockwise) in `/boot/config.txt`
+  - X11 software rotation: `xrandr --rotate right` in GUI startup scripts
+  - Touch screen transformation: Updated for clockwise rotation with `TransformationMatrix "0 1 0 -1 0 1 0 0 1"`
+  - Touch inversion: `InvertY=true` for clockwise portrait mode
+  - Both `.xinitrc` and `start-kiosk.sh` updated with clockwise rotation commands
+- **Benefit**: Clockwise rotation provides better touchscreen coordinate mapping for most displays
 
 **🔧 Comprehensive Build Improvements (December 2024)**:
 - **Problem**: Manual fixes required after image deployment for missing GUI files and packages
@@ -340,12 +343,37 @@ Custom Raspberry Pi OS Image
 - `scripts/rpi-deploy/build-pi-image-simple.sh` - macOS-friendly simple build
 - `complete-build-manual.sh` - Generated step-by-step completion guide
 
-### Ready for Testing Phase
+### ❌ NEW CRITICAL ISSUE IDENTIFIED - Package Installation Failure
 
-**✅ ALL BUILD ISSUES RESOLVED** - Users now have:
-1. **Simple approach** (recommended): Creates base image + manual SD card steps
-2. **Docker approach** (advanced): Full automation with credential workaround  
-3. **Linux approach** (fastest): Direct build for Linux users
+**🚨 Build Process Issue**: Latest Docker build created broken image with missing packages
+- **Root Cause**: Package installation in chroot environment failed during Docker build
+- **Symptoms**: Pi boots but shows "read only file system" error, no SSH access
+- **Missing Packages**: chromium-browser, openbox, xinit, openssh-server, Node.js
+- **Impact**: Services fail to start → systemd protective read-only filesystem mount → inaccessible Pi
+
+**🔧 Immediate Fixes Implemented**:
+1. **fix-readonly-filesystem.sh** - Console recovery script for Pi with filesystem issues
+2. **fix-missing-packages.sh** - Automated package installation script for broken Pi images
+3. **Enhanced build-pi-image-docker.sh** with:
+   - DNS configuration fixes for chroot environment
+   - Package installation retries with timeout handling  
+   - Multiple fallback options for each package
+   - Comprehensive package verification before completing build
+   - Build abortion if critical packages missing (prevents broken images)
+
+**🏗️ Build Script Improvements**:
+- Added robust DNS settings (`8.8.8.8`, `1.1.1.1`) in chroot
+- Package installation with retries and 30-second timeouts
+- Individual package fallbacks (chromium → firefox-esr, default nodejs repo)
+- Critical package validation before image finalization
+- Error handling prevents creation of non-functional images
+
+**Recovery Options for Existing Broken Image**:
+1. **Manual Recovery**: Connect keyboard/monitor to Pi → run recovery scripts
+2. **Package Fix**: Transfer `fix-missing-packages.sh` to Pi and execute  
+3. **Rebuild** (recommended): Use enhanced build scripts for new image
+
+**Status**: Build scripts updated to prevent future package installation failures
 
 ## Lessons Learned
 
@@ -418,3 +446,12 @@ Custom Raspberry Pi OS Image
 - Document and verify where application files are actually installed vs. where services expect them
 - Ensure build scripts match the actual runtime file layout
 - Test file paths in both build-time and runtime contexts
+
+**Package Installation in Docker Chroot Environment** (December 2024):
+- DNS resolution can fail in Docker chroot environments, causing package installation failures
+- Always configure DNS (`nameserver 8.8.8.8`) before package operations in chroot
+- Use retries and timeouts for package downloads due to network instability in containers
+- Validate critical packages are installed before finalizing image build
+- Failed package installation can lead to broken images that appear to boot but have missing functionality
+- Missing GUI packages cause service failures that can trigger read-only filesystem protection
+- Always abort build process if essential packages fail to install rather than creating broken images

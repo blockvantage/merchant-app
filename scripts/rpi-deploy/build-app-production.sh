@@ -424,8 +424,8 @@ xset -dpms
 xset s off  
 xset s noblank
 
-# Rotate display for portrait mode (90 degrees counterclockwise)
-xrandr --output HDMI-1 --rotate left 2>/dev/null || xrandr --output HDMI-A-1 --rotate left 2>/dev/null || echo "Display rotation applied at boot level"
+# Rotate display for portrait mode (90 degrees clockwise)
+xrandr --output HDMI-1 --rotate right 2>/dev/null || xrandr --output HDMI-A-1 --rotate right 2>/dev/null || echo "Display rotation applied at boot level"
 
 # Hide cursor
 unclutter -idle 1 &
@@ -468,7 +468,7 @@ echo "=============================================="
 echo "This script helps calibrate your 5\" touchscreen in portrait mode."
 echo ""
 echo "Current configuration:"
-echo "- Display: Portrait mode (90° counterclockwise rotation)"
+echo "- Display: Portrait mode (90° clockwise rotation)"
 echo "- Touch rotation: Configured with transformation matrix"
 echo ""
 echo "Touch configuration files:"
@@ -482,9 +482,9 @@ echo "3. Follow the on-screen instructions"
 echo "4. Update values in X11 config if needed"
 echo ""
 echo "Portrait mode settings:"
-echo "- TransformationMatrix: \"0 -1 1 1 0 0 0 0 1\""
+echo "- TransformationMatrix: \"0 1 0 -1 0 1 0 0 1\""
 echo "- SwapAxes: enabled"
-echo "- InvertX: enabled for portrait"
+echo "- InvertY: enabled for clockwise portrait"
 echo ""
 echo "Current hardware configuration:"
 grep "ads7846" /boot/config.txt || echo "No ads7846 configuration found"
@@ -652,8 +652,8 @@ xset -dpms
 xset s off
 xset s noblank
 
-# Rotate display for portrait mode (90 degrees counterclockwise)
-xrandr --output HDMI-1 --rotate left 2>/dev/null || xrandr --output HDMI-A-1 --rotate left 2>/dev/null || echo "Display rotation applied at boot level"
+# Rotate display for portrait mode (90 degrees clockwise)
+xrandr --output HDMI-1 --rotate right 2>/dev/null || xrandr --output HDMI-A-1 --rotate right 2>/dev/null || echo "Display rotation applied at boot level"
 
 # Hide cursor after 1 second of inactivity
 unclutter -idle 1 &
@@ -686,9 +686,9 @@ Section "InputClass"
     MatchProduct "ADS7846 Touchscreen"
     Option "Calibration" "200 3900 200 3900"
     Option "SwapAxes" "1"
-    Option "InvertX" "true"
-    Option "InvertY" "false"
-    Option "TransformationMatrix" "0 -1 1 1 0 0 0 0 1"
+    Option "InvertX" "false"
+    Option "InvertY" "true"
+    Option "TransformationMatrix" "0 1 0 -1 0 1 0 0 1"
 EndSection
 
 Section "InputClass"
@@ -696,7 +696,7 @@ Section "InputClass"
     MatchIsTouchscreen "on"
     MatchDevicePath "/dev/input/event*"
     Driver "evdev"
-    Option "TransformationMatrix" "0 -1 1 1 0 0 0 0 1"
+    Option "TransformationMatrix" "0 1 0 -1 0 1 0 0 1"
 EndSection
 EOF
 
