@@ -10,15 +10,21 @@ This guide explains how to create a bootable Raspberry Pi image with your NFC pa
 - 32GB+ MicroSD card
 - Raspberry Pi 4B
 - 7" touchscreen display
-- NFC reader (compatible with nfc-pcsc)
+- ACR1252U - USB NFC Reader III (P/N: ACR1252U-M1)
 
-### 1. Initial Setup
+### 1. Navigate to Deployment Scripts
 ```bash
-# Clone and setup build environment
+# Change to the deployment directory
+cd scripts/rpi-deploy
+```
+
+### 2. Initial Setup
+```bash
+# Setup build environment
 ./setup-build-environment.sh
 ```
 
-### 2. Configure Your Deployment
+### 3. Configure Your Deployment
 ```bash
 # Copy template and edit with your settings
 cp build-config.env.template build-config.env
@@ -40,7 +46,7 @@ BLOCKCHAIN_NETWORKS="ethereum,base,arbitrum,optimism,polygon,starknet"
 
 ⚠️ **CRITICAL**: Replace `MERCHANT_ETH_ADDRESS` with your actual Ethereum wallet address. The build will **fail** if you leave the default `0x000...` value.
 
-### 3. Build the Image
+### 4. Build the Image
 
 **For macOS (Recommended):**
 ```bash
@@ -56,7 +62,7 @@ BLOCKCHAIN_NETWORKS="ethereum,base,arbitrum,optimism,polygon,starknet"
 
 > **Note**: macOS doesn't natively support ext2/ext4 filesystems used by Raspberry Pi OS. The Docker version provides a Linux environment for proper filesystem operations.
 
-### 4. Flash and Deploy
+### 5. Flash and Deploy
 ```bash
 # Flash the created image to SD card using Raspberry Pi Imager
 # File will be named: nfc-terminal-YYYYMMDD.img.gz
@@ -81,11 +87,46 @@ The Docker-based build script (`build-pi-image-docker.sh`) solves this by:
 2. **Sufficient disk space** - ~10GB for base images and build artifacts
 3. **Time** - Docker build takes longer but is more reliable
 
+## 📡 ACR1252U-M1 NFC Reader Support
+
+This deployment is specifically configured for the **ACR1252U-M1 NFC reader**, which is automatically detected and configured during the build process.
+
+### What's Included:
+- **ACS PCSC drivers** for ACR1252U-M1 compatibility
+- **Automatic device detection** when plugged via USB
+- **Contact/Contactless support** for various card types
+- **LED indicator support** for transaction feedback
+
+### Supported Card Types:
+- **ISO 14443 Type A/B** (most payment cards)
+- **MIFARE Classic/Ultralight** 
+- **FeliCa** cards
+- **NFC Forum Type 1-4** tags
+
+### Hardware Setup:
+1. Connect ACR1252U-M1 via USB to Raspberry Pi
+2. The device will be automatically detected on boot
+3. Green LED indicates ready status
+4. Blue LED flashes during card reads
+
+### Troubleshooting ACR1252U-M1:
+```bash
+# Check if reader is detected
+lsusb | grep ACS
+
+# Check PCSC daemon status
+sudo systemctl status pcscd
+
+# List connected readers
+pcsc_scan
+```
+
 ## 📁 Generated Files
 
-After running the build process, you'll have:
+After running the build process from `scripts/rpi-deploy/`, you'll have:
 
 ```
+scripts/rpi-deploy/
 ├── setup-build-environment.sh     # Environment setup
 ├── build-app-production.sh        # Application builder  
 ├── build-pi-image.sh              # Direct build script (Linux)

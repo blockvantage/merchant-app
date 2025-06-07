@@ -259,8 +259,30 @@ Custom Raspberry Pi OS Image
 
 ### Files Updated:
 - `build/fdisk-util.sh` - Added macOS-compatible disk utilities with hdiutil
-- `build-pi-image-docker.sh` - Complete Docker-based build script for macOS
-- `README-DEPLOYMENT.md` - Added macOS compatibility section and troubleshooting
+- `scripts/rpi-deploy/build-pi-image-docker.sh` - Complete Docker-based build script for macOS
+- `scripts/rpi-deploy/build-pi-image.sh` - Updated with ACR1252U-M1 driver support
+- `scripts/rpi-deploy/build-app-production.sh` - Added ACR1252U-M1 driver installation
+- `README-DEPLOYMENT.md` - Updated for new directory structure and ACR1252U-M1 support
+- `README.md` - Added Raspberry Pi deployment section with hardware requirements
+
+### Recent Updates (Directory Restructure):
+**🔄 Directory Structure Update**: 
+- **All build scripts moved** to `scripts/rpi-deploy/` directory
+- **Updated documentation** to reflect new file locations
+- **Added cd instructions** for proper workflow
+- **Fixed path references**: `build/` directory local to scripts, `dist/` at root level
+
+**📡 ACR1252U-M1 NFC Reader Support**: 
+- **Specific driver installation** for ACR1252U-M1 model
+- **ACS PCSC drivers** included in build process
+- **Hardware compatibility section** added to documentation
+- **Troubleshooting guide** for NFC reader issues
+
+**📖 Documentation Updates**:
+- **Main README** now includes Raspberry Pi deployment section
+- **Complete deployment guide** linked and updated
+- **Hardware requirements** clearly specified
+- **Step-by-step instructions** updated for new directory structure
 
 ### Ready for Testing Phase
 

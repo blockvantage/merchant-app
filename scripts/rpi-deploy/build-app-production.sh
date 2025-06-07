@@ -5,37 +5,41 @@ echo "🏗️  Building NFC Payment Terminal for Production Deployment..."
 
 # Clean previous builds
 echo "🧹 Cleaning previous builds..."
-rm -rf dist/
+rm -rf ../../dist/
 rm -rf build/app-bundle/
 
 # Create production bundle directory
 mkdir -p build/app-bundle
 
-# Install dependencies and build TypeScript
+# Install dependencies and build TypeScript (from root)
 echo "📦 Installing dependencies..."
+cd ../../
 npm ci --production=false
 
 echo "🔨 Building TypeScript..."
 npm run build
 
+# Return to deployment directory
+cd scripts/rpi-deploy
+
 # Create production bundle structure
 echo "📁 Creating production bundle..."
 mkdir -p build/app-bundle/{app,config}
 
-# Copy built application
-cp -r dist/* build/app-bundle/app/
+# Copy built application (from root dist)
+cp -r ../../dist/* build/app-bundle/app/
 
-# Copy package files for production install
-cp package.json build/app-bundle/
-cp package-lock.json build/app-bundle/
+# Copy package files for production install (from root)
+cp ../../package.json build/app-bundle/
+cp ../../package-lock.json build/app-bundle/
 
-# Copy source files that might be needed
-cp -r src/web build/app-bundle/app/
+# Copy source files that might be needed (from root)
+cp -r ../../src/web build/app-bundle/app/
 
 # Create production package.json (remove dev dependencies)
 echo "📦 Creating production package.json..."
 node -e "
-const pkg = require('./package.json');
+const pkg = require('../../package.json');
 delete pkg.devDependencies;
 pkg.scripts = {
   'start': 'node app/server.js'
@@ -210,6 +214,12 @@ sudo apt update && sudo apt upgrade -y
 # Install required packages
 echo "📦 Installing required packages..."
 sudo apt install -y nodejs npm chromium-browser openbox unclutter libnfc-bin libpcsclite-dev pcscd pcsc-tools
+
+# Install ACR1252U-M1 specific drivers
+echo "📡 Installing ACR1252U-M1 NFC reader drivers..."
+wget -O /tmp/acsccid.deb http://downloads.acs.com.hk/drivers/en/API-ACR1252U-M1-P1.5.01/API-ACR1252U-M1-P1.5.01.tar.gz
+cd /tmp && tar -xzf API-ACR1252U-M1-P1.5.01.tar.gz
+sudo dpkg -i acsccid_*.deb || sudo apt-get install -f -y
 
 # Install application
 echo "📁 Installing application..."

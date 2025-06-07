@@ -198,6 +198,13 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
 apt-get install -y nodejs chromium-browser openbox unclutter libnfc-bin libpcsclite-dev pcscd pcsc-tools xserver-xorg xinit curl wget
+
+# Install ACR1252U-M1 specific drivers
+echo "📡 Installing ACR1252U-M1 NFC reader drivers..."
+wget -q -O /tmp/acs-unified.tar.bz2 https://www.acs.com.hk/download-driver-unified/11771/ACS-Unified-PKG-Lnx-118-P.tar.bz2
+cd /tmp && tar -xjf acs-unified.tar.bz2
+dpkg -i acsccid_*.deb || apt-get install -f -y
+
 systemctl enable pcscd ssh
 cd /opt/nfc-terminal && npm ci --production
 chown -R pi:pi /opt/nfc-terminal /home/pi

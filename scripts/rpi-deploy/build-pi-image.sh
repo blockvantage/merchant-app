@@ -230,6 +230,12 @@ apt-get install -y \
     curl \
     wget
 
+# Install ACR1252U-M1 specific drivers
+echo "📡 Installing ACR1252U-M1 NFC reader drivers..."
+wget -q -O /tmp/acs-unified.tar.bz2 https://www.acs.com.hk/download-driver-unified/11771/ACS-Unified-PKG-Lnx-118-P.tar.bz2
+cd /tmp && tar -xjf acs-unified.tar.bz2
+dpkg -i acsccid_*.deb || apt-get install -f -y
+
 # Enable required services
 systemctl enable pcscd
 systemctl enable ssh

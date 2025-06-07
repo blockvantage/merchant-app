@@ -133,10 +133,45 @@ Update `src/config/index.ts` to customize:
 - **GET** `/transaction-history` - Retrieve all transaction history
 - **POST** `/scan-wallet` - Initiate wallet scanning for history filtering
 
+## 🍓 Raspberry Pi Deployment
+
+This NFC payment terminal can be deployed as a **plug-and-play kiosk** on Raspberry Pi hardware for production use.
+
+### **Hardware Requirements**
+- Raspberry Pi 4B (4GB+ RAM recommended)
+- 7" Official Raspberry Pi Touchscreen 
+- **ACR1252U-M1 NFC Reader** (specifically supported)
+- 32GB+ MicroSD card
+
+### **Deployment Features**
+- **One-command build** creates bootable SD card image
+- **Pre-configured WiFi** and API credentials
+- **Automatic startup** with fullscreen kiosk mode
+- **Safety validation** prevents deployment with test addresses
+- **macOS and Linux** build support
+
+### **Quick Deploy**
+```bash
+# Navigate to deployment scripts
+cd scripts/rpi-deploy
+
+# Configure your deployment
+cp build-config.env.template build-config.env
+# Edit build-config.env with your WiFi, API key, and merchant address
+
+# Build bootable image (macOS)
+./build-pi-image-docker.sh
+
+# Flash the generated .img.gz file to SD card and boot!
+```
+
+📖 **[Complete Deployment Guide](README-DEPLOYMENT.md)**
+
 ## 🎯 Business Benefits
 
 - **Reduced Support Calls**: Staff can instantly view customer transaction history
-- **Payment Verification**: Block explorer links provide transaction proof
+- **Payment Verification**: Block explorer links provide transaction proof  
 - **Customer Experience**: Fast L2 payments with immediate confirmation
 - **Multi-Chain Flexibility**: Accepts payments on 6 different blockchain networks
 - **Audit Trail**: Comprehensive transaction logging for accounting
+- **Production Ready**: Deploy as dedicated payment kiosk with Raspberry Pi
