@@ -726,6 +726,8 @@ create_freepay_user() {
     if id freepay &>/dev/null; then
         echo "Removing existing freepay user..."
         userdel -r freepay 2>/dev/null || userdel -f freepay 2>/dev/null || true
+        # Clean up home directory if it still exists
+        rm -rf /home/freepay 2>/dev/null || true
     fi
     
     # Check if UID 1000 is taken by another user
@@ -736,7 +738,15 @@ create_freepay_user() {
             pkill -u "$existing_user" 2>/dev/null || true
             sleep 1
             userdel -r "$existing_user" 2>/dev/null || userdel -f "$existing_user" 2>/dev/null || true
+            # Clean up any remaining home directory
+            rm -rf "/home/$existing_user" 2>/dev/null || true
         fi
+    fi
+    
+    # Ensure no conflicting home directory exists
+    if [ -d "/home/freepay" ]; then
+        echo "Cleaning up existing home directory..."
+        rm -rf /home/freepay
     fi
     
     # Create freepay user with UID 1000

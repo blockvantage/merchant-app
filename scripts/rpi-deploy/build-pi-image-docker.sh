@@ -602,7 +602,34 @@ fi
 if [ "$SKIP_ACS_DRIVER" != "true" ]; then
     echo "Extracting and building ACS driver..."
     echo "Attempting to extract $ACS_FILE..."
-    if tar -xzf "$ACS_FILE" 2>/dev/null || tar -xjf "$ACS_FILE" 2>/dev/null; then
+    
+    # Try extraction based on file extension first
+    extracted=false
+    if [[ "$ACS_FILE" == *.tar.gz ]]; then
+        if tar -xzf "$ACS_FILE" 2>/dev/null; then
+            echo "✅ Successfully extracted .tar.gz file"
+            extracted=true
+        fi
+    elif [[ "$ACS_FILE" == *.tar.bz2 ]]; then
+        if tar -xjf "$ACS_FILE" 2>/dev/null; then
+            echo "✅ Successfully extracted .tar.bz2 file"
+            extracted=true
+        fi
+    fi
+    
+    # Fallback: try both extraction methods if first attempt failed
+    if [ "$extracted" = "false" ]; then
+        echo "Primary extraction failed, trying both compression formats..."
+        if tar -xzf "$ACS_FILE" 2>/dev/null; then
+            echo "✅ Extracted as .tar.gz"
+            extracted=true
+        elif tar -xjf "$ACS_FILE" 2>/dev/null; then
+            echo "✅ Extracted as .tar.bz2"
+            extracted=true
+        fi
+    fi
+    
+    if [ "$extracted" = "true" ]; then
         echo "ACS driver source extracted successfully"
         # Navigate to the extracted directory
         ACS_DIR=$(find . -name "acsccid-*" -type d | head -1)
@@ -785,16 +812,19 @@ else
 fi
 
 echo "Enabling system services..."
-for service in pcscd wifi-unblock wifi-connect nfc-terminal display-setup start-gui boot-debug dhcpcd; do
-    if systemctl enable "$service" >/dev/null 2>&1; then
-        echo "✅ Enabled $service"
-    else
-        echo "❌ Failed to enable $service, trying manual linking..."
-        # Try manual linking as fallback
-        if [ -f "/etc/systemd/system/$service.service" ]; then
-            ln -sf "/etc/systemd/system/$service.service" "/etc/systemd/system/multi-user.target.wants/" 2>/dev/null && echo "✅ Manually linked $service" || echo "❌ Failed to manually link $service"
+services_to_enable="pcscd wifi-unblock wifi-connect nfc-terminal display-setup start-gui boot-debug dhcpcd"
+for service in $services_to_enable; do
+    if [ -n "$service" ] && [ "$service" != "" ]; then
+        if systemctl enable "$service" >/dev/null 2>&1; then
+            echo "✅ Enabled $service"
         else
-            echo "⚠️  Service file $service.service not found"
+            echo "❌ Failed to enable $service, trying manual linking..."
+            # Try manual linking as fallback
+            if [ -f "/etc/systemd/system/$service.service" ]; then
+                ln -sf "/etc/systemd/system/$service.service" "/etc/systemd/system/multi-user.target.wants/" 2>/dev/null && echo "✅ Manually linked $service" || echo "❌ Failed to manually link $service"
+            else
+                echo "⚠️  Service file $service.service not found"
+            fi
         fi
     fi
 done
@@ -808,30 +838,37 @@ fi
 
 echo "Additional manual service linking for critical services..."
 # Ensure critical services are linked even if systemctl enable failed
-critical_links=(
-    "pcscd.service:/etc/systemd/system:multi-user.target.wants"
-    "dhcpcd.service:/lib/systemd/system:multi-user.target.wants"
-    "start-gui.service:/etc/systemd/system:graphical.target.wants"
-    "nfc-terminal.service:/etc/systemd/system:multi-user.target.wants"
-)
+echo "Linking pcscd service..."
+if [ -f "/etc/systemd/system/pcscd.service" ]; then
+    mkdir -p "/etc/systemd/system/multi-user.target.wants"
+    ln -sf "/etc/systemd/system/pcscd.service" "/etc/systemd/system/multi-user.target.wants/" && echo "✅ Linked pcscd.service" || echo "❌ Failed to link pcscd.service"
+else
+    echo "⚠️  pcscd.service not found"
+fi
 
-for link_spec in "${critical_links[@]}"; do
-    service_name="${link_spec%%:*}"
-    source_dir="${link_spec#*:}"
-    target_dir="${source_dir#*:}"
-    source_dir="${source_dir%:*}"
-    
-    if [ -f "$source_dir/$service_name" ]; then
-        mkdir -p "/etc/systemd/system/$target_dir"
-        if ln -sf "$source_dir/$service_name" "/etc/systemd/system/$target_dir/" 2>/dev/null; then
-            echo "✅ Linked $service_name to $target_dir"
-        else
-            echo "❌ Failed to link $service_name"
-        fi
-    else
-        echo "⚠️  Service $service_name not found at $source_dir"
-    fi
-done
+echo "Linking dhcpcd service..."
+if [ -f "/lib/systemd/system/dhcpcd.service" ]; then
+    mkdir -p "/etc/systemd/system/multi-user.target.wants"
+    ln -sf "/lib/systemd/system/dhcpcd.service" "/etc/systemd/system/multi-user.target.wants/" && echo "✅ Linked dhcpcd.service" || echo "❌ Failed to link dhcpcd.service"
+else
+    echo "⚠️  dhcpcd.service not found"
+fi
+
+echo "Linking start-gui service..."
+if [ -f "/etc/systemd/system/start-gui.service" ]; then
+    mkdir -p "/etc/systemd/system/graphical.target.wants"
+    ln -sf "/etc/systemd/system/start-gui.service" "/etc/systemd/system/graphical.target.wants/" && echo "✅ Linked start-gui.service" || echo "❌ Failed to link start-gui.service"
+else
+    echo "⚠️  start-gui.service not found"
+fi
+
+echo "Linking nfc-terminal service..."
+if [ -f "/etc/systemd/system/nfc-terminal.service" ]; then
+    mkdir -p "/etc/systemd/system/multi-user.target.wants"
+    ln -sf "/etc/systemd/system/nfc-terminal.service" "/etc/systemd/system/multi-user.target.wants/" && echo "✅ Linked nfc-terminal.service" || echo "❌ Failed to link nfc-terminal.service"
+else
+    echo "⚠️  nfc-terminal.service not found"
+fi
 
 echo "Package installation complete!"
 INSTALL_SCRIPT
