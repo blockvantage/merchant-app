@@ -475,10 +475,8 @@ dtparam=spi=on
 # Audio
 dtparam=audio=on
 
-# Optional: if display is rotated, uncomment one of these:
-# display_rotate=1  # 90 degrees
-# display_rotate=2  # 180 degrees  
-# display_rotate=3  # 270 degrees
+# Display rotation: 90 degrees counterclockwise (portrait mode)
+display_rotate=3  # 270 degrees = 90 degrees counterclockwise
 
 # Touch screen calibration (may need adjustment for your specific display)
 # These values are typical for 5" 800x480 displays but may need fine-tuning
@@ -519,6 +517,11 @@ chmod +x "$MOUNT_ROOT/home/freepay/debug-gui.sh"
 # Install .xinitrc for X11 startup
 cp /build/build/app-bundle/config/xinitrc "$MOUNT_ROOT/home/freepay/.xinitrc"
 chmod +x "$MOUNT_ROOT/home/freepay/.xinitrc"
+
+# Set proper ownership for freepay home directory files (before chroot)
+echo "🔧 Setting file ownership for freepay user..."
+# Note: Inside chroot, UID 1000 will be freepay, so we set ownership to 1000:1000
+chown -R 1000:1000 "$MOUNT_ROOT/home/freepay" 2>/dev/null || echo "⚠️  Pre-chroot ownership setting failed (will be fixed in chroot)"
 
 # Install X11 configuration for 5" touchscreen
 echo "👆 Installing X11 touch configuration..."

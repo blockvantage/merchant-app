@@ -292,10 +292,10 @@ Type=simple
 User=freepay
 WorkingDirectory=/opt/nfc-terminal
 Environment=NODE_ENV=production
-EnvironmentFile=/opt/nfc-terminal/.env
+EnvironmentFile=-/opt/nfc-terminal/.env
 ExecStartPre=/bin/bash -c 'echo "Checking NFC terminal directory..."; ls -la /opt/nfc-terminal/ || (echo "ERROR: /opt/nfc-terminal not found"; exit 1)'
-ExecStartPre=/bin/bash -c 'echo "Checking Node.js and app files..."; which node || echo "Node.js not found"; ls -la /opt/nfc-terminal/app/ || echo "app/ directory not found"'
-ExecStart=/usr/bin/node app/server.js
+ExecStartPre=/bin/bash -c 'echo "Checking Node.js and server.js..."; which node || echo "Node.js not found"; ls -la /opt/nfc-terminal/server.js || echo "server.js not found"'
+ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -421,6 +421,9 @@ xset -dpms
 xset s off  
 xset s noblank
 
+# Rotate display for portrait mode (90 degrees counterclockwise)
+xrandr --output HDMI-1 --rotate left 2>/dev/null || xrandr --output HDMI-A-1 --rotate left 2>/dev/null || echo "Display rotation applied at boot level"
+
 # Hide cursor
 unclutter -idle 1 &
 
@@ -457,26 +460,34 @@ chmod +x build/app-bundle/config/start-kiosk.sh
 echo "📱 Creating touch screen calibration script..."
 cat > build/app-bundle/config/calibrate-touch.sh << 'EOF'
 #!/bin/bash
-echo "Touch Screen Calibration Tool"
-echo "============================="
-echo "This script helps calibrate your 5\" touchscreen if touch is not accurate."
+echo "Touch Screen Calibration Tool (Portrait Mode)"
+echo "=============================================="
+echo "This script helps calibrate your 5\" touchscreen in portrait mode."
 echo ""
-echo "Current touch configuration is in /boot/config.txt"
-echo "Look for the ads7846 overlay line."
+echo "Current configuration:"
+echo "- Display: Portrait mode (90° counterclockwise rotation)"
+echo "- Touch rotation: Configured with transformation matrix"
+echo ""
+echo "Touch configuration files:"
+echo "- Hardware config: /boot/config.txt (ads7846 overlay)"
+echo "- X11 config: /etc/X11/xorg.conf.d/99-calibration.conf"
 echo ""
 echo "To run interactive calibration:"
 echo "1. Make sure X11 is running (startx)"
 echo "2. Run: xinput_calibrator"
 echo "3. Follow the on-screen instructions"
-echo "4. Update the values in /boot/config.txt if needed"
+echo "4. Update values in X11 config if needed"
 echo ""
-echo "Common issues:"
-echo "- Touch is inverted: add or remove 'swapxy=1' in the ads7846 line"
-echo "- Touch offset: adjust xmin, xmax, ymin, ymax values"
-echo "- Sensitivity: adjust 'pmax' value"
+echo "Portrait mode settings:"
+echo "- TransformationMatrix: \"0 -1 1 1 0 0 0 0 1\""
+echo "- SwapAxes: enabled"
+echo "- InvertX: enabled for portrait"
 echo ""
-echo "Current configuration:"
+echo "Current hardware configuration:"
 grep "ads7846" /boot/config.txt || echo "No ads7846 configuration found"
+echo ""
+echo "Current X11 touch configuration:"
+cat /etc/X11/xorg.conf.d/99-calibration.conf 2>/dev/null || echo "X11 touch config not found"
 EOF
 chmod +x build/app-bundle/config/calibrate-touch.sh
 
@@ -607,6 +618,9 @@ xset -dpms
 xset s off
 xset s noblank
 
+# Rotate display for portrait mode (90 degrees counterclockwise)
+xrandr --output HDMI-1 --rotate left 2>/dev/null || xrandr --output HDMI-A-1 --rotate left 2>/dev/null || echo "Display rotation applied at boot level"
+
 # Hide cursor after 1 second of inactivity
 unclutter -idle 1 &
 
@@ -629,7 +643,7 @@ cat > build/app-bundle/config/bashrc-append << 'EOF'
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
 EOF
 
-# Create X11 input configuration for 5" touchscreen
+# Create X11 input configuration for 5" touchscreen (portrait mode)
 echo "👆 Creating X11 touch configuration..."
 mkdir -p build/app-bundle/config/xorg.conf.d
 cat > build/app-bundle/config/xorg.conf.d/99-calibration.conf << 'EOF'
@@ -638,8 +652,9 @@ Section "InputClass"
     MatchProduct "ADS7846 Touchscreen"
     Option "Calibration" "200 3900 200 3900"
     Option "SwapAxes" "1"
-    Option "InvertX" "false"
+    Option "InvertX" "true"
     Option "InvertY" "false"
+    Option "TransformationMatrix" "0 -1 1 1 0 0 0 0 1"
 EndSection
 
 Section "InputClass"
@@ -647,6 +662,7 @@ Section "InputClass"
     MatchIsTouchscreen "on"
     MatchDevicePath "/dev/input/event*"
     Driver "evdev"
+    Option "TransformationMatrix" "0 -1 1 1 0 0 0 0 1"
 EndSection
 EOF
 

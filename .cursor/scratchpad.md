@@ -284,6 +284,36 @@ Custom Raspberry Pi OS Image
 - **Hardware requirements** clearly specified
 - **Step-by-step instructions** updated for new directory structure
 
+### Critical Build Fixes Applied (December 2024):
+**🔧 NFC Terminal Service Path Fix**:
+- **Problem**: Service was trying to run `app/server.js` but file is actually `server.js` 
+- **Solution**: Updated `nfc-terminal.service` in `build-app-production.sh` to use correct path
+- **Changes Made**: 
+  - Changed `ExecStart=/usr/bin/node app/server.js` to `ExecStart=/usr/bin/node server.js`
+  - Updated pre-start check from `ls -la /opt/nfc-terminal/app/` to `ls -la /opt/nfc-terminal/server.js`
+  - Added `-` prefix to `EnvironmentFile` to make .env file optional
+
+**🏠 File Ownership Fix**:
+- **Problem**: `start-kiosk.sh` and other files in `/home/freepay/` had incorrect ownership
+- **Solution**: Added explicit ownership setting in Docker build script
+- **Changes Made**: Added `chown -R 1000:1000 "$MOUNT_ROOT/home/freepay"` after file copying
+
+**✅ Verified Working Configuration**:
+- NFC terminal service starts successfully and responds on http://localhost:3000
+- GUI service launches X11 and Chromium in kiosk mode
+- All files have correct ownership and permissions
+- System boots directly to fullscreen NFC terminal interface
+
+**🖥️ Portrait Mode Display Support**:
+- **Problem**: User requested 90-degree counterclockwise rotation for vertical orientation
+- **Solution**: Added comprehensive display rotation configuration
+- **Changes Made**:
+  - Boot-level rotation: `display_rotate=3` in `/boot/config.txt`
+  - X11 software rotation: `xrandr --rotate left` in GUI startup scripts
+  - Touch screen transformation: Updated X11 input configuration with proper transformation matrix
+  - Both `.xinitrc` and `start-kiosk.sh` updated with rotation commands
+- **Touch Configuration**: Added `TransformationMatrix "0 -1 1 1 0 0 0 0 1"` for portrait mode touch mapping
+
 ### Docker Build Issue Resolved:
 
 **🐳 Docker Credential Problem**: 
@@ -345,3 +375,33 @@ Custom Raspberry Pi OS Image
 - Touchscreen driver issues
 - Network connectivity configuration
 - Boot time optimization 
+
+## Lessons Learned
+
+### Technical Lessons from Boot Issues (December 2024)
+
+**Service Path Validation**:
+- Always verify that systemd service `ExecStart` paths match actual file locations
+- Test service files against the actual deployed file structure, not assumed structure
+- Use full debugging checks in service pre-start commands to catch missing files early
+
+**File Ownership in Chroot Builds**:
+- When copying files to mounted filesystems before chroot, set ownership using UIDs (1000:1000) not usernames
+- Username-based ownership only works after the user exists in the target system
+- Always set ownership both before AND after user creation for reliability
+
+**Build Process Testing**:
+- Always test that the built image actually boots and runs the intended services
+- Create diagnostic scripts during build to help debug boot issues
+- Include service status checks and file verification in diagnostic output
+
+**Debugging Boot Issues**:
+- Missing executable files often cause "No such file or directory" errors
+- Check both file existence AND correct paths in service definitions  
+- Use journalctl and systemctl status to identify service startup failures
+- SSH access is critical for debugging - ensure it works before GUI attempts
+
+**File Structure Consistency**:
+- Document and verify where application files are actually installed vs. where services expect them
+- Ensure build scripts match the actual runtime file layout
+- Test file paths in both build-time and runtime contexts
