@@ -514,6 +514,14 @@ chmod +x "$MOUNT_ROOT/home/freepay/calibrate-touch.sh"
 chmod +x "$MOUNT_ROOT/home/freepay/connect-wifi.sh"
 chmod +x "$MOUNT_ROOT/home/freepay/debug-gui.sh"
 
+# Verify critical files were copied
+echo "🔍 Verifying critical GUI files..."
+if [ ! -f "$MOUNT_ROOT/home/freepay/start-kiosk.sh" ]; then
+    echo "❌ ERROR: start-kiosk.sh was not copied properly"
+    exit 1
+fi
+echo "✅ start-kiosk.sh verified"
+
 # Install .xinitrc for X11 startup
 cp /build/build/app-bundle/config/xinitrc "$MOUNT_ROOT/home/freepay/.xinitrc"
 chmod +x "$MOUNT_ROOT/home/freepay/.xinitrc"
@@ -641,7 +649,19 @@ apt-get install -y -qq \
     openbox \
     unclutter \
     xserver-xorg \
-    xinit >/dev/null 2>&1 || { echo "ERROR: Failed to install core GUI packages (nodejs, chromium, openbox, xinit)"; exit 1; }
+    xinit \
+    curl \
+    xrandr >/dev/null 2>&1 || { echo "ERROR: Failed to install core GUI packages (nodejs, chromium, openbox, xinit)"; exit 1; }
+
+echo "Verifying critical GUI packages..."
+# Verify essential GUI packages are installed
+for pkg in chromium-browser openbox unclutter xinit curl; do
+    if ! dpkg -l | grep -q "^ii.*$pkg"; then
+        echo "WARNING: Package $pkg may not be properly installed"
+    else
+        echo "✅ Package $pkg verified"
+    fi
+done
 
 echo "Installing X11 input packages..."
 apt-get install -y -qq \
@@ -849,6 +869,24 @@ chmod -R 755 /opt/nfc-terminal
 
 # File permissions will be set after freepay user is created
 
+# Verify freepay user setup was successful
+echo "Verifying freepay user setup..."
+if ! id freepay &>/dev/null; then
+    echo "ERROR: freepay user not found after setup!"
+    echo "Attempting emergency user creation..."
+    useradd -m -s /bin/bash -u 1000 -U freepay || true
+    echo "freepay:freepay" | chpasswd || true
+    usermod -aG sudo,plugdev,dialout,video,audio,input,tty,users freepay || true
+    echo "Emergency user creation completed"
+fi
+
+# Final ownership and permission fixes
+echo "Setting final file permissions and ownership..."
+chown -R freepay:freepay /opt/nfc-terminal 2>/dev/null || echo "⚠️  Failed to set NFC terminal ownership"
+mkdir -p /home/freepay
+chown -R freepay:freepay /home/freepay 2>/dev/null || echo "⚠️  Failed to set home directory ownership"
+chmod 755 /home/freepay
+
 echo "Setting up SSH user..."
 if /tmp/setup-ssh-user.sh; then
     echo "✅ SSH user setup completed successfully"
@@ -930,8 +968,18 @@ update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 >/dev/null 2>&1 || true
 # Configure X11 permissions for freepay user
 echo "Configuring X11 permissions..."
 # Allow freepay user to start X11 server
+mkdir -p /etc/X11
 echo 'allowed_users=anybody' > /etc/X11/Xwrapper.config
 echo 'needs_root_rights=yes' >> /etc/X11/Xwrapper.config
+
+# Verify X11 configuration
+echo "Verifying X11 configuration..."
+if [ -f /etc/X11/Xwrapper.config ]; then
+    echo "✅ X11 wrapper config created:"
+    cat /etc/X11/Xwrapper.config
+else
+    echo "❌ Failed to create X11 wrapper config"
+fi
 
 # Add freepay to required groups for X11 and console access
 usermod -aG tty,video,input,audio freepay 2>/dev/null || true

@@ -332,6 +332,9 @@ WorkingDirectory=/home/freepay
 ExecStartPre=/bin/bash -c 'echo "Waiting for freepay user..."; for i in {1..60}; do if id freepay &>/dev/null; then echo "freepay user found: $(id freepay)"; break; else echo "Waiting for freepay user ($i/60)"; sleep 1; fi; done; if ! id freepay &>/dev/null; then echo "ERROR: freepay user not found after 60 seconds"; exit 1; fi'
 ExecStartPre=/bin/bash -c 'echo "Setting up runtime directory..."; mkdir -p /run/user/1000; chown freepay:freepay /run/user/1000; chmod 700 /run/user/1000'
 ExecStartPre=/bin/bash -c 'echo "Verifying home directory..."; ls -la /home/freepay || (echo "ERROR: /home/freepay not found"; exit 1)'
+ExecStartPre=/bin/bash -c 'echo "Verifying GUI files..."; test -f /home/freepay/start-kiosk.sh || (echo "ERROR: start-kiosk.sh not found"; exit 1); test -x /home/freepay/start-kiosk.sh || (echo "ERROR: start-kiosk.sh not executable"; exit 1)'
+ExecStartPre=/bin/bash -c 'echo "Checking GUI packages..."; which chromium-browser || (echo "ERROR: chromium-browser not installed"; exit 1); which openbox || (echo "ERROR: openbox not installed"; exit 1)'
+ExecStartPre=/bin/bash -c 'echo "Verifying NFC terminal accessibility..."; timeout 30 bash -c "until curl -f http://localhost:3000 >/dev/null 2>&1; do sleep 2; done" || echo "WARNING: NFC terminal not responding, proceeding anyway"'
 ExecStartPre=/bin/bash -c 'echo "Starting X11 server for freepay user..."'
 ExecStart=/bin/bash -c 'cd /home/freepay && export HOME=/home/freepay && export USER=freepay && sudo -u freepay env HOME=/home/freepay USER=freepay DISPLAY=:0 /usr/bin/startx /home/freepay/start-kiosk.sh -- :0 vt1 -keeptty -nolisten tcp'
 Restart=always
@@ -583,6 +586,35 @@ echo "- X11 processes: $(ps aux | grep -E '[Xx]org|xinit|startx' | wc -l) runnin
 echo "- Chromium processes: $(ps aux | grep -v grep | grep chromium | wc -l) running"
 echo ""
 
+echo "📁 Critical Files Check:"
+echo "- start-kiosk.sh: $(test -f /home/freepay/start-kiosk.sh && echo "✅ exists" || echo "❌ missing")"
+echo "- start-kiosk.sh executable: $(test -x /home/freepay/start-kiosk.sh && echo "✅ yes" || echo "❌ no")"
+echo "- .xinitrc: $(test -f /home/freepay/.xinitrc && echo "✅ exists" || echo "❌ missing")"
+echo "- X11 wrapper config: $(test -f /etc/X11/Xwrapper.config && echo "✅ exists" || echo "❌ missing")"
+echo ""
+
+echo "📦 Required Packages:"
+for pkg in chromium-browser openbox unclutter xinit curl; do
+    if command -v $pkg >/dev/null 2>&1; then
+        echo "- $pkg: ✅ installed"
+    else
+        echo "- $pkg: ❌ missing"
+    fi
+done
+echo ""
+
+echo "👤 User & Permissions:"
+echo "- freepay user: $(id freepay 2>/dev/null || echo "❌ not found")"
+echo "- freepay groups: $(groups freepay 2>/dev/null || echo "❌ cannot check")"
+echo "- Runtime dir: $(test -d /run/user/1000 && echo "✅ exists" || echo "❌ missing")"
+echo "- Runtime ownership: $(ls -ld /run/user/1000 2>/dev/null | awk '{print $3":"$4}' || echo "❌ cannot check")"
+echo ""
+
+echo "🖥️ X11 Configuration:"
+echo "- X11 wrapper config:"
+cat /etc/X11/Xwrapper.config 2>/dev/null || echo "❌ File not found"
+echo ""
+
 echo "📋 Detailed Service Logs (last 20 lines):"
 echo ""
 echo "=== NFC Terminal Service ==="
@@ -596,15 +628,17 @@ echo "🔧 Manual Test Commands:"
 echo ""
 echo "To test GUI manually:"
 echo "1. Stop the service: sudo systemctl stop start-gui.service"
-echo "2. Test X11 manually: sudo -u freepay DISPLAY=:0 xinit /home/freepay/start-kiosk.sh -- :0 vt1"
-echo "3. Or test kiosk script: sudo -u freepay /home/freepay/start-kiosk.sh"
+echo "2. Kill any stuck X processes: sudo pkill -f 'Xorg|xinit'"
+echo "3. Test kiosk script directly: sudo -u freepay /home/freepay/start-kiosk.sh"
+echo "4. Test X11 manually: sudo -u freepay DISPLAY=:0 startx /home/freepay/start-kiosk.sh -- :0 vt1"
 echo ""
 echo "To see live logs:"
 echo "sudo journalctl -u start-gui.service -f"
 echo ""
-echo "To check X11 capabilities:"
-echo "ls -la /usr/bin/X*"
-echo "which xinit"
+echo "To restart everything cleanly:"
+echo "sudo systemctl stop start-gui.service"
+echo "sudo pkill -f 'Xorg|xinit|chromium'"
+echo "sudo systemctl start start-gui.service"
 echo ""
 EOF
 chmod +x build/app-bundle/config/debug-gui.sh
