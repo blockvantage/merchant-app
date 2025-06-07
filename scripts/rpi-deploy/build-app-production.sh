@@ -85,13 +85,20 @@ cat > build/app-bundle/config/wifi-connect.service << 'EOF'
 Description=WiFi Connection Service
 Before=network-online.target
 After=systemd-networkd.service wifi-unblock.service
-Wants=wifi-unblock.service
+Wants=wifi-unblock.service systemd-networkd.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf && dhclient wlan0'
+ExecStartPre=/bin/bash -c 'for i in {1..10}; do if ip link show wlan0 2>/dev/null; then echo "wlan0 interface found"; break; else echo "Waiting for wlan0 interface ($i/10)"; sleep 2; fi; done'
+ExecStartPre=/usr/sbin/rfkill unblock wifi
+ExecStartPre=/usr/sbin/rfkill unblock wlan
+ExecStartPre=/sbin/ip link set wlan0 up
+ExecStartPre=/bin/bash -c 'echo "Checking wpa_supplicant config files..."; ls -la /etc/wpa_supplicant/wpa_supplicant*.conf'
+ExecStart=/bin/bash -c 'echo "Manual WiFi connection approach..."; if ! pgrep wpa_supplicant.*wlan0; then echo "Starting wpa_supplicant for wlan0..."; wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf -D nl80211; sleep 8; echo "Checking wpa_supplicant status..."; iwconfig wlan0 | grep ESSID || echo "Not associated yet"; fi; echo "Requesting DHCP..."; if systemctl is-active --quiet systemd-networkd; then echo "Using systemd-networkd for DHCP"; networkctl reload; networkctl reconfigure wlan0; else echo "Using dhclient for DHCP"; dhclient -v wlan0 || true; fi; sleep 5; echo "Final status:"; ip addr show wlan0'
 RemainAfterExit=yes
-TimeoutStartSec=30
+TimeoutStartSec=90
+Restart=on-failure
+RestartSec=15
 
 [Install]
 WantedBy=multi-user.target
@@ -286,6 +293,8 @@ User=freepay
 WorkingDirectory=/opt/nfc-terminal
 Environment=NODE_ENV=production
 EnvironmentFile=/opt/nfc-terminal/.env
+ExecStartPre=/bin/bash -c 'echo "Checking NFC terminal directory..."; ls -la /opt/nfc-terminal/ || (echo "ERROR: /opt/nfc-terminal not found"; exit 1)'
+ExecStartPre=/bin/bash -c 'echo "Checking Node.js and app files..."; which node || echo "Node.js not found"; ls -la /opt/nfc-terminal/app/ || echo "app/ directory not found"'
 ExecStart=/usr/bin/node app/server.js
 Restart=always
 RestartSec=10
@@ -314,8 +323,8 @@ Conflicts=getty@tty1.service
 
 [Service]
 Type=simple
-User=freepay
-Group=freepay
+User=root
+Group=root
 Environment=HOME=/home/freepay
 Environment=DISPLAY=:0
 Environment=XDG_RUNTIME_DIR=/run/user/1000
@@ -324,7 +333,7 @@ ExecStartPre=/bin/bash -c 'echo "Waiting for freepay user..."; for i in {1..60};
 ExecStartPre=/bin/bash -c 'echo "Setting up runtime directory..."; mkdir -p /run/user/1000; chown freepay:freepay /run/user/1000; chmod 700 /run/user/1000'
 ExecStartPre=/bin/bash -c 'echo "Verifying home directory..."; ls -la /home/freepay || (echo "ERROR: /home/freepay not found"; exit 1)'
 ExecStartPre=/bin/bash -c 'echo "Starting X11 server for freepay user..."'
-ExecStart=/usr/bin/xinit /home/freepay/start-kiosk.sh -- :0 vt1 -keeptty
+ExecStart=/bin/bash -c 'cd /home/freepay && export HOME=/home/freepay && export USER=freepay && sudo -u freepay env HOME=/home/freepay USER=freepay DISPLAY=:0 /usr/bin/startx /home/freepay/start-kiosk.sh -- :0 vt1 -keeptty -nolisten tcp'
 Restart=always
 RestartSec=20
 StandardOutput=journal
@@ -340,14 +349,17 @@ EOF
 cat > build/app-bundle/config/wifi-unblock.service << 'EOF'
 [Unit]
 Description=Unblock WiFi on boot
-Before=wifi-connect.service
+Before=wifi-connect.service wpa_supplicant@wlan0.service systemd-networkd.service
+After=rfkill-unblock-wifi.service
 DefaultDependencies=no
 
 [Service]
 Type=oneshot
-ExecStart=/usr/sbin/rfkill unblock wifi
-ExecStart=/usr/sbin/rfkill unblock wlan
+ExecStartPre=/bin/bash -c 'echo "Checking rfkill status..."; rfkill list || true'
+ExecStart=/bin/bash -c 'echo "Unblocking WiFi interfaces..."; rfkill unblock wifi; rfkill unblock wlan; rfkill unblock all'
+ExecStartPost=/bin/bash -c 'echo "WiFi unblock completed"; rfkill list wifi || true'
 RemainAfterExit=yes
+TimeoutStartSec=10
 
 [Install]
 WantedBy=multi-user.target

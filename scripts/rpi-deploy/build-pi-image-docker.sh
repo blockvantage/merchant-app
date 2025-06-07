@@ -278,10 +278,31 @@ mount "$ROOT_DEV" "$MOUNT_ROOT"
 
 # Install application files
 echo "📦 Installing application..."
+echo "Checking source application files..."
+ls -la /build/build/app-bundle/ || { echo "ERROR: app-bundle directory not found"; exit 1; }
+ls -la /build/build/app-bundle/app/ || { echo "ERROR: app directory not found"; exit 1; }
+
 mkdir -p "$MOUNT_ROOT/opt/nfc-terminal"
-cp -r /build/build/app-bundle/app/. "$MOUNT_ROOT/opt/nfc-terminal/"
-cp /build/build/app-bundle/package.json "$MOUNT_ROOT/opt/nfc-terminal/"
-cp /build/build/app-bundle/package-lock.json "$MOUNT_ROOT/opt/nfc-terminal/"
+echo "Copying application files..."
+cp -r /build/build/app-bundle/app/* "$MOUNT_ROOT/opt/nfc-terminal/" || { echo "ERROR: Failed to copy app files"; exit 1; }
+
+if [ -f "/build/build/app-bundle/package.json" ]; then
+    cp /build/build/app-bundle/package.json "$MOUNT_ROOT/opt/nfc-terminal/"
+    echo "✅ package.json copied"
+else
+    echo "WARNING: package.json not found"
+fi
+
+if [ -f "/build/build/app-bundle/package-lock.json" ]; then
+    cp /build/build/app-bundle/package-lock.json "$MOUNT_ROOT/opt/nfc-terminal/"
+    echo "✅ package-lock.json copied"
+else
+    echo "WARNING: package-lock.json not found, will be created by npm"
+fi
+
+echo "Verifying application installation..."
+ls -la "$MOUNT_ROOT/opt/nfc-terminal/" || { echo "ERROR: Failed to verify app installation"; exit 1; }
+echo "✅ Application files installed successfully"
 
 # Create environment file with real values
 cat > "$MOUNT_ROOT/opt/nfc-terminal/.env" << ENV_FILE
@@ -297,17 +318,113 @@ ENV_FILE
 echo "📶 Configuring WiFi..."
 mkdir -p "$MOUNT_ROOT/etc/wpa_supplicant"
 cat > "$MOUNT_ROOT/etc/wpa_supplicant/wpa_supplicant.conf" << WIFI_CONFIG
+# WiFi country setting (required to prevent rfkill blocking)
 country=US
 ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
 update_config=1
+ap_scan=1
 
+# Network configuration
 network={
     ssid="WIFI_SSID_VALUE"
     psk="WIFI_PASSWORD_VALUE"
     key_mgmt=WPA-PSK
+    scan_ssid=1
+    priority=1
 }
 WIFI_CONFIG
 chmod 600 "$MOUNT_ROOT/etc/wpa_supplicant/wpa_supplicant.conf"
+chown root:root "$MOUNT_ROOT/etc/wpa_supplicant/wpa_supplicant.conf"
+
+# Configure WiFi interface
+echo "Configuring WiFi interface..."
+# Create network configuration for WiFi
+mkdir -p "$MOUNT_ROOT/etc/systemd/network"
+cat > "$MOUNT_ROOT/etc/systemd/network/25-wireless.network" << WIFI_NETWORK
+[Match]
+Name=wlan0
+
+[Network]
+DHCP=yes
+IPForward=no
+
+[DHCP]
+RouteMetric=20
+WIFI_NETWORK
+
+# Enable systemd-networkd and wpa_supplicant services
+mkdir -p "$MOUNT_ROOT/etc/systemd/system/multi-user.target.wants"
+ln -sf /lib/systemd/system/systemd-networkd.service "$MOUNT_ROOT/etc/systemd/system/multi-user.target.wants/" 2>/dev/null || true
+ln -sf /lib/systemd/system/systemd-resolved.service "$MOUNT_ROOT/etc/systemd/system/multi-user.target.wants/" 2>/dev/null || true
+
+# Create interface-specific wpa_supplicant config for systemd service
+echo "Creating interface-specific wpa_supplicant config..."
+cp "$MOUNT_ROOT/etc/wpa_supplicant/wpa_supplicant.conf" "$MOUNT_ROOT/etc/wpa_supplicant/wpa_supplicant-wlan0.conf"
+chown root:root "$MOUNT_ROOT/etc/wpa_supplicant/wpa_supplicant-wlan0.conf"
+chmod 600 "$MOUNT_ROOT/etc/wpa_supplicant/wpa_supplicant-wlan0.conf"
+
+# Enable wpa_supplicant for wlan0
+ln -sf /lib/systemd/system/wpa_supplicant@.service "$MOUNT_ROOT/etc/systemd/system/multi-user.target.wants/wpa_supplicant@wlan0.service" 2>/dev/null || true
+
+# Configure rfkill to unblock WiFi permanently
+echo "Configuring rfkill to unblock WiFi..."
+# Create rfkill configuration
+mkdir -p "$MOUNT_ROOT/etc/systemd/system"
+cat > "$MOUNT_ROOT/etc/systemd/system/rfkill-unblock-wifi.service" << RFKILL_SERVICE
+[Unit]
+Description=Unblock WiFi with rfkill
+DefaultDependencies=no
+Before=network-pre.target wifi-unblock.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'rfkill unblock wifi; rfkill unblock wlan; rfkill unblock all'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target
+RFKILL_SERVICE
+
+# Enable the rfkill unblock service
+ln -sf "/etc/systemd/system/rfkill-unblock-wifi.service" "$MOUNT_ROOT/etc/systemd/system/sysinit.target.wants/" 2>/dev/null || true
+
+# Create WiFi country setup service
+cat > "$MOUNT_ROOT/etc/systemd/system/wifi-country-setup.service" << COUNTRY_SERVICE
+[Unit]
+Description=Set WiFi Country Configuration
+DefaultDependencies=no
+Before=network-pre.target wifi-unblock.service rfkill-unblock-wifi.service
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'echo "Setting WiFi country to US..."; raspi-config nonint do_wifi_country US 2>/dev/null || true; echo "US" > /etc/wpa_supplicant/country 2>/dev/null || true; iw reg set US 2>/dev/null || true'
+RemainAfterExit=yes
+TimeoutStartSec=10
+
+[Install]
+WantedBy=sysinit.target
+COUNTRY_SERVICE
+
+# Enable the country setup service
+ln -sf "/etc/systemd/system/wifi-country-setup.service" "$MOUNT_ROOT/etc/systemd/system/sysinit.target.wants/" 2>/dev/null || true
+
+# Also add rfkill unblock to rc.local as backup
+echo "Adding rfkill unblock to rc.local..."
+if [ -f "$MOUNT_ROOT/etc/rc.local" ]; then
+    # Insert before exit 0
+    sed -i '/^exit 0/i # Unblock WiFi\nrfkill unblock wifi 2>/dev/null || true\nrfkill unblock wlan 2>/dev/null || true\n' "$MOUNT_ROOT/etc/rc.local"
+else
+    # Create rc.local if it doesn't exist
+    cat > "$MOUNT_ROOT/etc/rc.local" << RC_LOCAL
+#!/bin/bash
+# Unblock WiFi
+rfkill unblock wifi 2>/dev/null || true
+rfkill unblock wlan 2>/dev/null || true
+exit 0
+RC_LOCAL
+    chmod +x "$MOUNT_ROOT/etc/rc.local"
+fi
 
 # Install systemd services
 echo "⚙️  Installing systemd services..."
@@ -688,6 +805,8 @@ if [ -d "/opt/nfc-terminal" ]; then
     cd /opt/nfc-terminal
     echo "Found NFC terminal directory: $(pwd)"
     echo "Contents: $(ls -la)"
+    echo "Checking for server.js or main app file..."
+    ls -la server.js 2>/dev/null || ls -la app.js 2>/dev/null || ls -la index.js 2>/dev/null || echo "WARNING: No main app file found"
 else
     echo "ERROR: /opt/nfc-terminal directory not found!"
     echo "Available directories in /opt:"
@@ -773,11 +892,79 @@ rm -f /etc/xdg/autostart/wifi-country.desktop 2>/dev/null || true
 # Set country for WiFi (prevents country dialog)
 echo 'REGDOMAIN=US' > /etc/default/crda
 
+# Configure WiFi country in multiple places to prevent warnings
+echo "Configuring WiFi country settings..."
+# Set country in raspi-config format
+raspi-config nonint do_wifi_country US 2>/dev/null || true
+
+# Set country in wpa_supplicant 
+if [ -f /etc/wpa_supplicant/wpa_supplicant.conf ]; then
+    if ! grep -q "country=" /etc/wpa_supplicant/wpa_supplicant.conf; then
+        sed -i '1i country=US' /etc/wpa_supplicant/wpa_supplicant.conf
+    fi
+fi
+
+# Set regulatory domain
+echo 'options cfg80211 ieee80211_regdom=US' > /etc/modprobe.d/cfg80211.conf
+
+# Create regulatory database if it doesn't exist
+mkdir -p /etc/iw
+echo "country US: DFS-UNSET" > /etc/iw/regulatory.db.txt 2>/dev/null || true
+
+# Set country in kernel boot parameters if not already set
+if [ -f /boot/cmdline.txt ]; then
+    if ! grep -q "cfg80211.ieee80211_regdom=US" /boot/cmdline.txt; then
+        sed -i 's/$/ cfg80211.ieee80211_regdom=US/' /boot/cmdline.txt
+    fi
+fi
+
 # Configure locale and keyboard to prevent setup dialogs
 echo 'LANG=en_US.UTF-8' > /etc/default/locale
 echo 'LC_ALL=en_US.UTF-8' >> /etc/default/locale
 dpkg-reconfigure -f noninteractive locales >/dev/null 2>&1 || true
 update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 >/dev/null 2>&1 || true
+
+# Configure X11 permissions for freepay user
+echo "Configuring X11 permissions..."
+# Allow freepay user to start X11 server
+echo 'allowed_users=anybody' > /etc/X11/Xwrapper.config
+echo 'needs_root_rights=yes' >> /etc/X11/Xwrapper.config
+
+# Add freepay to required groups for X11 and console access
+usermod -aG tty,video,input,audio freepay 2>/dev/null || true
+
+# Configure console login for freepay user (enables console user privileges)
+echo "Configuring console access for freepay user..."
+mkdir -p /etc/systemd/system/getty@tty1.service.d
+cat > /etc/systemd/system/getty@tty1.service.d/autologin.conf << AUTOLOGIN_CONF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin freepay --noclear %I \$TERM
+Type=idle
+AUTOLOGIN_CONF
+
+# Enable getty on tty1 to ensure freepay user is console user
+systemctl enable getty@tty1.service 2>/dev/null || true
+
+# Add freepay to console users for X11 access
+echo "freepay" >> /etc/console-users 2>/dev/null || true
+mkdir -p /var/lib/ConsoleKit/
+echo "freepay" > /var/lib/ConsoleKit/console-users 2>/dev/null || true
+
+# Configure pam_console for X11 access
+if [ -f /etc/security/console.apps ]; then
+    echo "freepay" >> /etc/security/console.apps
+fi
+
+# Unblock WiFi immediately in chroot
+echo "Unblocking WiFi in chroot environment..."
+rfkill unblock wifi 2>/dev/null || true
+rfkill unblock wlan 2>/dev/null || true
+rfkill unblock all 2>/dev/null || true
+
+# Set regulatory domain immediately
+echo "Setting WiFi regulatory domain..."
+iw reg set US 2>/dev/null || true
 
 echo "Configuring SSH service..."
 # Ensure SSH service is properly configured
