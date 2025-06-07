@@ -57,7 +57,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
+User=freepay
 WorkingDirectory=/opt/nfc-terminal
 Environment=NODE_ENV=production
 EnvironmentFile=/opt/nfc-terminal/.env
@@ -123,7 +123,7 @@ Requires=nfc-terminal.service
 
 [Service]
 Type=simple
-User=pi
+User=freepay
 Environment=DISPLAY=:0
 ExecStartPre=/bin/bash -c 'until curl -f http://localhost:3000; do sleep 2; done'
 ExecStart=/usr/bin/chromium-browser --kiosk --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --disable-features=TranslateUI --no-first-run --fast --fast-start --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --autoplay-policy=no-user-gesture-required --no-sandbox --disable-dev-shm-usage http://localhost:3000
@@ -142,20 +142,20 @@ set -e
 
 echo "🚀 NFC Payment Terminal - First Boot Setup"
 
-# Enable auto-login for pi user
+# Enable auto-login for freepay user
 echo "⚙️  Configuring auto-login..."
 sudo systemctl set-default graphical.target
 sudo mkdir -p /etc/systemd/system/getty@tty1.service.d/
 cat > /tmp/autologin.conf << AUTOLOGIN
 [Service]
 ExecStart=
-ExecStart=-/sbin/agetty --autologin pi --noclear %I \$TERM
+ExecStart=-/sbin/agetty --autologin freepay --noclear %I \$TERM
 AUTOLOGIN
 sudo mv /tmp/autologin.conf /etc/systemd/system/getty@tty1.service.d/
 
 # Configure X11 to start automatically
 echo "🖥️  Configuring X11 auto-start..."
-sudo -u pi mkdir -p /home/pi/.config/autostart
+sudo -u freepay mkdir -p /home/freepay/.config/autostart
 cat > /tmp/autostart-x.desktop << AUTOSTART
 [Desktop Entry]
 Type=Application
@@ -165,10 +165,10 @@ Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
 AUTOSTART
-sudo mv /tmp/autostart-x.desktop /home/pi/.config/autostart/
-sudo chown pi:pi /home/pi/.config/autostart/autostart-x.desktop
+sudo mv /tmp/autostart-x.desktop /home/freepay/.config/autostart/
+sudo chown freepay:freepay /home/freepay/.config/autostart/autostart-x.desktop
 
-# Create .xinitrc for pi user
+# Create .xinitrc for freepay user
 echo "🌐 Configuring X11 startup..."
 cat > /tmp/xinitrc << XINITRC
 #!/bin/bash
@@ -189,9 +189,9 @@ sleep 2
 # Start Chromium kiosk
 chromium-browser --kiosk --no-sandbox --disable-infobars --disable-session-crashed-bubble --disable-restore-session-state --disable-features=TranslateUI --no-first-run --fast --fast-start --disable-default-apps --disable-popup-blocking --disable-translate --disable-background-timer-throttling --disable-renderer-backgrounding --disable-device-discovery-notifications --autoplay-policy=no-user-gesture-required --disable-dev-shm-usage http://localhost:3000
 XINITRC
-sudo mv /tmp/xinitrc /home/pi/.xinitrc
-sudo chown pi:pi /home/pi/.xinitrc
-sudo chmod +x /home/pi/.xinitrc
+sudo mv /tmp/xinitrc /home/freepay/.xinitrc
+sudo chown freepay:freepay /home/freepay/.xinitrc
+sudo chmod +x /home/freepay/.xinitrc
 
 echo "✅ First boot setup complete"
 echo "System will reboot to apply changes..."
@@ -226,12 +226,12 @@ echo "📁 Installing application..."
 sudo mkdir -p /opt/nfc-terminal
 sudo cp -r app/* /opt/nfc-terminal/
 sudo cp .env /opt/nfc-terminal/ 2>/dev/null || echo "⚠️  No .env file found - will be created by build script"
-sudo chown -R pi:pi /opt/nfc-terminal
+sudo chown -R freepay:freepay /opt/nfc-terminal
 
 # Install application dependencies
 echo "📦 Installing Node.js dependencies..."
 cd /opt/nfc-terminal
-sudo -u pi npm ci --production
+sudo -u freepay npm ci --production
 
 # Install systemd services
 echo "⚙️  Installing systemd services..."
@@ -247,7 +247,7 @@ sudo systemctl enable display-setup.service
 # Configure PCSC for NFC
 echo "📡 Configuring NFC services..."
 sudo systemctl enable pcscd
-sudo usermod -a -G plugdev pi
+sudo usermod -a -G plugdev freepay
 
 echo "✅ Installation complete!"
 echo "Run first-boot setup with: sudo ./config/first-boot-setup.sh"
@@ -652,38 +652,62 @@ echo "👤 Creating user setup scripts..."
 # SSH user setup script
 cat > build/app-bundle/config/setup-ssh-user.sh << 'EOF'
 #!/bin/bash
-set -e
+echo "Setting up SSH user..."
+
+# Set default values if not provided
+SSH_USERNAME=${SSH_USERNAME:-freepay}
+SSH_PASSWORD=${SSH_PASSWORD:-freepay}
 
 echo "Setting up SSH user: $SSH_USERNAME"
 
+if [ -z "$SSH_USERNAME" ] || [ "$SSH_USERNAME" = "SSH_USERNAME_VALUE" ]; then
+    echo "❌ No valid SSH username provided, skipping SSH user setup"
+    exit 0
+fi
+
 # Create the user if it doesn't exist
 if ! id "$SSH_USERNAME" &>/dev/null; then
-    useradd -m -s /bin/bash "$SSH_USERNAME"
-    echo "User $SSH_USERNAME created"
+    if useradd -m -s /bin/bash "$SSH_USERNAME"; then
+        echo "✅ User $SSH_USERNAME created"
+    else
+        echo "❌ Failed to create user $SSH_USERNAME"
+        exit 1
+    fi
 else
-    echo "User $SSH_USERNAME already exists"
+    echo "✅ User $SSH_USERNAME already exists"
 fi
 
 # Set password
-echo "$SSH_USERNAME:$SSH_PASSWORD" | chpasswd
-echo "Password set for $SSH_USERNAME"
+if echo "$SSH_USERNAME:$SSH_PASSWORD" | chpasswd; then
+    echo "✅ Password set for $SSH_USERNAME"
+else
+    echo "❌ Failed to set password for $SSH_USERNAME"
+    exit 1
+fi
 
-# Add user to sudo group for administrative access
-usermod -aG sudo "$SSH_USERNAME"
-echo "$SSH_USERNAME added to sudo group"
-
-# Add user to plugdev group for hardware access (NFC reader)
-usermod -aG plugdev "$SSH_USERNAME"
-
-# Add user to dialout group for serial access if needed
-usermod -aG dialout "$SSH_USERNAME"
+# Add user to essential groups
+echo "Adding $SSH_USERNAME to groups..."
+for group in sudo plugdev dialout; do
+    if getent group "$group" &>/dev/null; then
+        if usermod -aG "$group" "$SSH_USERNAME"; then
+            echo "✅ Added $SSH_USERNAME to $group group"
+        else
+            echo "❌ Failed to add $SSH_USERNAME to $group group"
+        fi
+    else
+        echo "⚠️  Group $group does not exist"
+    fi
+done
 
 # Ensure SSH directory exists for the user
-mkdir -p "/home/$SSH_USERNAME/.ssh"
-chmod 700 "/home/$SSH_USERNAME/.ssh"
-chown "$SSH_USERNAME:$SSH_USERNAME" "/home/$SSH_USERNAME/.ssh"
+echo "Setting up SSH directory..."
+if mkdir -p "/home/$SSH_USERNAME/.ssh" && chmod 700 "/home/$SSH_USERNAME/.ssh" && chown "$SSH_USERNAME:$SSH_USERNAME" "/home/$SSH_USERNAME/.ssh"; then
+    echo "✅ SSH directory setup completed"
+else
+    echo "❌ Failed to setup SSH directory"
+fi
 
-echo "SSH user $SSH_USERNAME setup completed successfully"
+echo "✅ SSH user $SSH_USERNAME setup completed successfully"
 EOF
 chmod +x build/app-bundle/config/setup-ssh-user.sh
 

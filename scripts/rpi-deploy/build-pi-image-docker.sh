@@ -473,9 +473,9 @@ FIRSTBOOT_SERVICE
 
 # Configure SSH with custom user
 echo "👤 Configuring SSH access..."
-SSH_USERNAME="SSH_USERNAME_VALUE"
-SSH_PASSWORD="SSH_PASSWORD_VALUE"
-SSH_ENABLE_PASSWORD_AUTH="SSH_ENABLE_PASSWORD_AUTH_VALUE"
+SSH_USERNAME="freepay"  # Default fallback user
+SSH_PASSWORD="freepay"  # Default fallback password
+SSH_ENABLE_PASSWORD_AUTH="true"
 
 # Configure SSH daemon for password authentication
 if [ "$SSH_ENABLE_PASSWORD_AUTH" = "true" ]; then
@@ -508,31 +508,31 @@ export DEBIAN_FRONTEND=noninteractive
 
 echo "=== Starting package installation in chroot ==="
 echo "Updating package lists..."
-apt-get update || { echo "ERROR: apt-get update failed"; exit 1; }
+apt-get update -qq >/dev/null 2>&1 || { echo "ERROR: Failed to update package lists"; exit 1; }
 
 echo "Installing Node.js repository..."
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash - || { echo "ERROR: Node.js repository setup failed"; exit 1; }
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1 || { echo "ERROR: Failed to setup Node.js repository"; exit 1; }
 
 echo "Installing core packages..."
 # Install packages in smaller groups to avoid dependency conflicts
-apt-get install -y \
+apt-get install -y -qq \
     nodejs \
     chromium-browser \
     openbox \
     unclutter \
     xserver-xorg \
-    xinit || { echo "ERROR: GUI package installation failed"; exit 1; }
+    xinit >/dev/null 2>&1 || { echo "ERROR: Failed to install core GUI packages (nodejs, chromium, openbox, xinit)"; exit 1; }
 
 echo "Installing X11 input packages..."
-apt-get install -y \
+apt-get install -y -qq \
     xserver-xorg-input-libinput \
     xserver-xorg-input-evdev \
     xserver-xorg-video-fbdev \
     xinput-calibrator \
-    xserver-xorg-input-synaptics || { echo "WARNING: Some X11 input packages failed"; }
+    xserver-xorg-input-synaptics >/dev/null 2>&1 || { echo "WARNING: Failed to install X11 input packages (touchscreen/mouse support)"; }
 
 echo "Installing network packages..."
-apt-get install -y \
+apt-get install -y -qq \
     curl \
     wget \
     dhcpcd5 \
@@ -540,20 +540,20 @@ apt-get install -y \
     wpasupplicant \
     wireless-tools \
     iw \
-    rfkill || { echo "ERROR: Network package installation failed"; exit 1; }
+    rfkill >/dev/null 2>&1 || { echo "ERROR: Failed to install network packages (WiFi/networking support)"; exit 1; }
 
 echo "Installing NFC and system packages..."
-apt-get install -y \
+apt-get install -y -qq \
     libnfc-bin \
     libpcsclite-dev \
     pcscd \
     pcsc-tools \
     console-setup \
-    keyboard-configuration || { echo "WARNING: Some system packages failed"; }
+    keyboard-configuration >/dev/null 2>&1 || { echo "WARNING: Failed to install NFC/system packages (NFC reader support)"; }
 
 echo "Installing SSH server if not already present..."
 if ! dpkg -l openssh-server >/dev/null 2>&1; then
-    apt-get install -y openssh-server || echo "WARNING: SSH server installation failed"
+    apt-get install -y -qq openssh-server >/dev/null 2>&1 || echo "WARNING: Failed to install SSH server"
 else
     echo "SSH server already installed"
 fi
@@ -562,7 +562,7 @@ echo "Core packages installed successfully"
 
 echo "Installing NFC reader support..."
 # Install basic NFC support packages and build dependencies first
-apt-get install -y libccid pcscd pcsc-tools libpcsclite-dev libusb-1.0-0-dev build-essential pkg-config flex perl autoconf libtool || echo "WARNING: Basic NFC packages installation failed"
+apt-get install -y -qq libccid pcscd pcsc-tools libpcsclite-dev libusb-1.0-0-dev build-essential pkg-config flex perl autoconf libtool >/dev/null 2>&1 || echo "WARNING: Failed to install NFC build dependencies"
 
 echo "Attempting to install ACR1252U-M1 specific drivers..."
 cd /tmp
@@ -572,9 +572,9 @@ ACS_DOWNLOADED=false
 
 # Try direct GitHub release (most reliable)
 echo "Trying GitHub acsccid release..."
-if timeout 60 wget --no-check-certificate -O acsccid-1.1.11.tar.bz2 "https://github.com/acshk/acsccid/releases/download/acsccid-1.1.11/acsccid-1.1.11.tar.bz2" 2>/dev/null; then
+if timeout 60 wget --no-check-certificate -O acsccid-1.1.11.tar.gz "https://github.com/acshk/acsccid/archive/refs/tags/v1.1.11.tar.gz" 2>/dev/null; then
     ACS_DOWNLOADED=true
-    ACS_FILE="acsccid-1.1.11.tar.bz2"
+    ACS_FILE="acsccid-1.1.11.tar.gz"
     echo "Successfully downloaded from GitHub"
 else
     echo "GitHub download failed, trying SourceForge..."
@@ -586,7 +586,7 @@ else
     else
         echo "SourceForge download failed, trying apt package manager..."
         # Try installing via package manager as fallback
-        if apt-get install -y acsccid 2>/dev/null; then
+        if apt-get install -y -qq acsccid >/dev/null 2>&1; then
             echo "Successfully installed ACS driver via package manager"
             ACS_DOWNLOADED=true
             SKIP_ACS_DRIVER=true  # Skip manual installation since apt handled it
@@ -601,26 +601,42 @@ fi
 
 if [ "$SKIP_ACS_DRIVER" != "true" ]; then
     echo "Extracting and building ACS driver..."
-    if tar -xjf "$ACS_FILE" 2>/dev/null; then
+    echo "Attempting to extract $ACS_FILE..."
+    if tar -xzf "$ACS_FILE" 2>/dev/null || tar -xjf "$ACS_FILE" 2>/dev/null; then
         echo "ACS driver source extracted successfully"
         # Navigate to the extracted directory
         ACS_DIR=$(find . -name "acsccid-*" -type d | head -1)
         if [ -d "$ACS_DIR" ]; then
             cd "$ACS_DIR"
             echo "Building ACS driver from source..."
-            # Build the driver from source
-            if ./configure --enable-embedded --disable-dependency-tracking 2>/dev/null && make 2>/dev/null && make install 2>/dev/null; then
-                echo "ACS driver built and installed successfully from source"
-                # Update library cache
-                ldconfig 2>/dev/null || true
+            # Build the driver from source  
+            echo "Running configure..."
+            if ./configure --enable-embedded --disable-dependency-tracking >/dev/null 2>&1; then
+                echo "Configure successful, running make..."
+                if make >/dev/null 2>&1; then
+                    echo "Make successful, installing..."
+                    if make install >/dev/null 2>&1; then
+                        echo "ACS driver built and installed successfully from source"
+                        # Update library cache
+                        ldconfig >/dev/null 2>&1 || true
+                    else
+                        echo "WARNING: Failed to install ACS driver"
+                    fi
+                else
+                    echo "WARNING: Failed to compile ACS driver"
+                fi
             else
+                echo "WARNING: Failed to configure ACS driver build"
+            fi
+            
+            if [ ! -f "/usr/lib/pcsc/drivers/ifd-acsccid.bundle/Contents/Linux/libacsccid.so" ]; then
                 echo "WARNING: Failed to build ACS driver from source, checking for pre-built packages..."
                 cd ..
                 # Try to find pre-built packages in case they exist
                 if ls acsccid_*.deb 1> /dev/null 2>&1; then
-                    dpkg -i acsccid_*.deb 2>/dev/null || {
+                    dpkg -i acsccid_*.deb >/dev/null 2>&1 || {
                         echo "WARNING: ACS driver package installation failed, using generic drivers"
-                        apt-get install -f -y 2>/dev/null || true
+                        apt-get install -f -y -qq >/dev/null 2>&1 || true
                     }
                     echo "ACS driver installation completed (or using fallback)"
                 else
@@ -640,15 +656,25 @@ if [ "$SKIP_ACS_DRIVER" != "true" ]; then
 fi
 
 echo "Installing Node.js dependencies..."
-cd /opt/nfc-terminal
-echo "Current directory: $(pwd)"
-echo "Contents: $(ls -la)"
+echo "Checking if NFC terminal app is installed..."
+if [ -d "/opt/nfc-terminal" ]; then
+    cd /opt/nfc-terminal
+    echo "Found NFC terminal directory: $(pwd)"
+    echo "Contents: $(ls -la)"
+else
+    echo "ERROR: /opt/nfc-terminal directory not found!"
+    echo "Available directories in /opt:"
+    ls -la /opt/ || echo "No /opt directory found"
+    echo "Searching for package.json files:"
+    find / -name "package.json" 2>/dev/null | head -10 || echo "No package.json found"
+    exit 1
+fi
 if [ -f package.json ]; then
     echo "Found package.json, installing dependencies..."
     # Set npm timeout and disable audit to speed up installation
-    npm config set audit false
-    npm config set fund false
-    npm config set update-notifier false
+    npm config set audit false >/dev/null 2>&1
+    npm config set fund false >/dev/null 2>&1
+    npm config set update-notifier false >/dev/null 2>&1
     
     # Install with timeout to prevent hanging
     timeout 600 npm ci --production --unsafe-perm --no-audit --no-fund --quiet || {
@@ -675,10 +701,18 @@ chmod -R 755 /opt/nfc-terminal
 # File permissions will be set after freepay user is created
 
 echo "Setting up SSH user..."
-/tmp/setup-ssh-user.sh
+if /tmp/setup-ssh-user.sh; then
+    echo "✅ SSH user setup completed successfully"
+else
+    echo "❌ SSH user setup failed with exit code $?"
+fi
 
 echo "Setting up freepay user..."
-/tmp/setup-freepay-user.sh
+if /tmp/setup-freepay-user.sh; then
+    echo "✅ Freepay user setup completed successfully"
+else
+    echo "❌ Freepay user setup failed with exit code $?"
+fi
 
 # Also create the user manually to ensure it exists
 echo "Double-checking freepay user creation..."
@@ -715,8 +749,8 @@ echo 'REGDOMAIN=US' > /etc/default/crda
 # Configure locale and keyboard to prevent setup dialogs
 echo 'LANG=en_US.UTF-8' > /etc/default/locale
 echo 'LC_ALL=en_US.UTF-8' >> /etc/default/locale
-dpkg-reconfigure -f noninteractive locales 2>/dev/null || true
-update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 2>/dev/null || true
+dpkg-reconfigure -f noninteractive locales >/dev/null 2>&1 || true
+update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 >/dev/null 2>&1 || true
 
 echo "Configuring SSH service..."
 # Ensure SSH service is properly configured
@@ -743,14 +777,61 @@ systemctl enable ssh 2>/dev/null || systemctl enable sshd 2>/dev/null || {
 
 echo "Enabling other services..."
 # Set graphical target as default
-systemctl set-default graphical.target 2>/dev/null || true
+echo "Setting graphical target as default..."
+if systemctl set-default graphical.target >/dev/null 2>&1; then
+    echo "✅ Graphical target set as default"
+else
+    echo "❌ Failed to set graphical target as default"
+fi
 
-systemctl enable pcscd wifi-unblock wifi-connect nfc-terminal display-setup start-gui boot-debug dhcpcd 2>/dev/null || {
-    echo "WARNING: Some services could not be enabled, will try manual linking"
-    # Manual service enabling as fallback
-    ln -sf /etc/systemd/system/pcscd.service /etc/systemd/system/multi-user.target.wants/ 2>/dev/null || true
-    ln -sf /lib/systemd/system/dhcpcd.service /etc/systemd/system/multi-user.target.wants/ 2>/dev/null || true
-}
+echo "Enabling system services..."
+for service in pcscd wifi-unblock wifi-connect nfc-terminal display-setup start-gui boot-debug dhcpcd; do
+    if systemctl enable "$service" >/dev/null 2>&1; then
+        echo "✅ Enabled $service"
+    else
+        echo "❌ Failed to enable $service, trying manual linking..."
+        # Try manual linking as fallback
+        if [ -f "/etc/systemd/system/$service.service" ]; then
+            ln -sf "/etc/systemd/system/$service.service" "/etc/systemd/system/multi-user.target.wants/" 2>/dev/null && echo "✅ Manually linked $service" || echo "❌ Failed to manually link $service"
+        else
+            echo "⚠️  Service file $service.service not found"
+        fi
+    fi
+done
+
+# Additional manual linking for critical services
+if systemctl list-unit-files | grep -q "start-gui.service"; then
+    echo "✅ start-gui.service is available"
+else
+    echo "❌ start-gui.service not found in systemctl list"
+fi
+
+echo "Additional manual service linking for critical services..."
+# Ensure critical services are linked even if systemctl enable failed
+critical_links=(
+    "pcscd.service:/etc/systemd/system:multi-user.target.wants"
+    "dhcpcd.service:/lib/systemd/system:multi-user.target.wants"
+    "start-gui.service:/etc/systemd/system:graphical.target.wants"
+    "nfc-terminal.service:/etc/systemd/system:multi-user.target.wants"
+)
+
+for link_spec in "${critical_links[@]}"; do
+    service_name="${link_spec%%:*}"
+    source_dir="${link_spec#*:}"
+    target_dir="${source_dir#*:}"
+    source_dir="${source_dir%:*}"
+    
+    if [ -f "$source_dir/$service_name" ]; then
+        mkdir -p "/etc/systemd/system/$target_dir"
+        if ln -sf "$source_dir/$service_name" "/etc/systemd/system/$target_dir/" 2>/dev/null; then
+            echo "✅ Linked $service_name to $target_dir"
+        else
+            echo "❌ Failed to link $service_name"
+        fi
+    else
+        echo "⚠️  Service $service_name not found at $source_dir"
+    fi
+done
 
 echo "Package installation complete!"
 INSTALL_SCRIPT
