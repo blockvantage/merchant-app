@@ -455,11 +455,12 @@ unclutter -idle 1 &
 echo "🌐 Starting Chromium in kiosk mode..."
 exec chromium-browser \
     --kiosk \
+    --app=http://localhost:3000 \
     --no-sandbox \
     --disable-infobars \
     --disable-session-crashed-bubble \
     --disable-restore-session-state \
-    --disable-features=TranslateUI,VizDisplayCompositor \
+    --disable-features=TranslateUI,VizDisplayCompositor,TouchpadAndWheelScrollLatching,kBackgroundResourceFetch \
     --no-first-run \
     --fast \
     --fast-start \
@@ -478,9 +479,17 @@ exec chromium-browser \
     --disable-web-security \
     --allow-running-insecure-content \
     --touch-events=enabled \
-    --enable-features=TouchpadAndWheelScrollLatching \
     --start-fullscreen \
-    http://localhost:3000
+    --window-size=800,480 \
+    --window-position=0,0 \
+    --force-device-scale-factor=1 \
+    --overscroll-history-navigation=0 \
+    --disable-pinch \
+    --disable-features=Translate \
+    --hide-scrollbars \
+    --no-default-browser-check \
+    --no-first-run \
+    --disable-background-color
 EOF
 chmod +x build/app-bundle/config/start-kiosk.sh
 
