@@ -437,9 +437,9 @@ xrandr --output HDMI-2 --rotate left 2>/dev/null || \
 xrandr --output HDMI-A-1 --rotate left 2>/dev/null || \
 echo "Display rotation not applied (may be configured at boot level)"
 
-# Configure touchscreen for portrait mode (no inversion)
+# Configure touchscreen for portrait mode (swap axes approach)
 echo "👆 Configuring touchscreen..."
-xinput set-prop "ADS7846 Touchscreen" "Coordinate Transformation Matrix" 0 -1 1 1 0 0 0 0 1 2>/dev/null || \
+xinput set-prop "ADS7846 Touchscreen" "Coordinate Transformation Matrix" 1 0 0 0 1 0 0 0 1 2>/dev/null || \
 echo "Touchscreen transformation not applied (device may not be present)"
 
 # Set up display power management
@@ -516,9 +516,9 @@ echo "3. Follow the on-screen instructions"
 echo "4. Update values in X11 config if needed"
 echo ""
 echo "Portrait mode settings:"
-echo "- TransformationMatrix: \"0 -1 1 1 0 0 0 0 1\""
-echo "- SwapAxes: enabled"
-echo "- InvertX: disabled, InvertY: disabled (no inversion)"
+echo "- TransformationMatrix: \"1 0 0 0 1 0 0 0 1\" (identity - no transformation)"
+echo "- SwapAxes: enabled (hardware-level axis swapping for rotation)"
+echo "- InvertX: disabled, InvertY: enabled (correct orientation for left rotation)"
 echo ""
 echo "Current hardware configuration:"
 grep "ads7846" /boot/config.txt || echo "No ads7846 configuration found"
@@ -699,9 +699,9 @@ xrandr --output HDMI-2 --rotate left 2>/dev/null || \
 xrandr --output HDMI-A-1 --rotate left 2>/dev/null || \
 echo "Display rotation not applied (may be configured at boot level)"
 
-# Configure touchscreen for portrait mode (no inversion)
+# Configure touchscreen for portrait mode (swap axes approach)
 echo "👆 Configuring touchscreen transformation..."
-xinput set-prop "ADS7846 Touchscreen" "Coordinate Transformation Matrix" 0 -1 1 1 0 0 0 0 1 2>/dev/null || \
+xinput set-prop "ADS7846 Touchscreen" "Coordinate Transformation Matrix" 1 0 0 0 1 0 0 0 1 2>/dev/null || \
 echo "Touchscreen transformation not applied (device may not be present)"
 
 # Hide cursor after 1 second of inactivity
@@ -738,10 +738,10 @@ Section "InputClass"
     Identifier "calibration"
     MatchProduct "ADS7846 Touchscreen"
     Option "Calibration" "200 3900 200 3900"
-    Option "SwapAxes" "1"
-    Option "InvertX" "false"
+    Option "SwapAxes" "0"
+    Option "InvertX" "true"
     Option "InvertY" "false"
-    Option "TransformationMatrix" "0 -1 1 1 0 0 0 0 1"
+    Option "TransformationMatrix" "1 0 0 0 1 0 0 0 1"
 EndSection
 
 Section "InputClass"
@@ -749,7 +749,7 @@ Section "InputClass"
     MatchIsTouchscreen "on"
     MatchDevicePath "/dev/input/event*"
     Driver "evdev"
-    Option "TransformationMatrix" "0 -1 1 1 0 0 0 0 1"
+    Option "TransformationMatrix" "1 0 0 0 1 0 0 0 1"
 EndSection
 EOF
 

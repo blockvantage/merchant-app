@@ -556,20 +556,12 @@ mkdir -p "$MOUNT_ROOT/etc/X11/xorg.conf.d"
 
 if [ -f "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d/99-calibration.conf" ]; then
     cp "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d/99-calibration.conf" "$MOUNT_ROOT/etc/X11/xorg.conf.d/"
-    echo "✅ Using original X11 touch config"
+    echo "✅ Using original X11 touch config from build-app-production.sh"
 else
-    echo "⚠️ Original X11 touch config not found, creating minimal version..."
-    cat > "$MOUNT_ROOT/etc/X11/xorg.conf.d/99-calibration.conf" << 'TOUCH_CONFIG'
-Section "InputClass"
-    Identifier "calibration"
-    MatchProduct "ADS7846 Touchscreen"
-    Option "Calibration" "200 3900 200 3900"
-    Option "SwapAxes" "1"
-    Option "InvertX" "true"
-    Option "InvertY" "true"
-    Option "TransformationMatrix" "0 -1 1 1 0 0 0 0 1"
-EndSection
-TOUCH_CONFIG
+    echo "❌ CRITICAL: Original X11 touch config not found!"
+    echo "❌ This indicates the config files from build-app-production.sh are not being copied properly"
+    echo "❌ Check the GUI_SOURCE_DIR copying logic above"
+    exit 1
 fi
 
 # Disable first-boot wizard and enable SSH
@@ -688,26 +680,40 @@ find /build -name "start-kiosk.sh" 2>/dev/null || echo "❌ start-kiosk.sh not f
 echo "Looking for service files:"
 find /build -name "*.service" 2>/dev/null | head -5 || echo "❌ service files not found"
 
-# Try to find config directory in the Docker mounted filesystem
+# Based on the mount test, check where files actually are
 GUI_SOURCE_DIR=""
-for possible_dir in "/build/build/app-bundle/config" "/build/scripts/rpi-deploy/build/app-bundle/config" "/build/app-bundle/config"; do
-    echo "Checking: $possible_dir"
-    if [ -d "$possible_dir" ]; then
-        GUI_SOURCE_DIR="$possible_dir"
-        echo "✅ Found source config directory at: $GUI_SOURCE_DIR"
-        echo "Contents:"
-        ls -la "$GUI_SOURCE_DIR/" 2>/dev/null
-        break
-    fi
-done
+echo "🔍 Checking actual mount structure..."
+echo "🔍 DEBUG: Testing direct paths..."
 
-# If not found in expected locations, search dynamically
+# Debug: Check exact paths we know from mount test
+echo "Testing /build/build/app-bundle/config/:"
+ls -la "/build/build/app-bundle/config/" 2>/dev/null || echo "❌ Path not found"
+echo "Testing /build/build/app-bundle/config/start-kiosk.sh:"
+[ -f "/build/build/app-bundle/config/start-kiosk.sh" ] && echo "✅ start-kiosk.sh exists" || echo "❌ start-kiosk.sh missing"
+echo "Testing /build/build/app-bundle/config/xorg.conf.d/:"
+[ -d "/build/build/app-bundle/config/xorg.conf.d" ] && echo "✅ xorg.conf.d exists" || echo "❌ xorg.conf.d missing"
+
+# Set GUI_SOURCE_DIR based on what we found
+if [ -f "/build/build/app-bundle/config/start-kiosk.sh" ]; then
+    GUI_SOURCE_DIR="/build/build/app-bundle/config"
+    echo "✅ Found config files in standard path: $GUI_SOURCE_DIR"
+    echo "Contents of $GUI_SOURCE_DIR:"
+    ls -la "$GUI_SOURCE_DIR/" 2>/dev/null
+else
+    echo "❌ Config files not found in expected location"
+fi
+
+# If still not found, do comprehensive search
 if [ -z "$GUI_SOURCE_DIR" ]; then
-    echo "Searching dynamically for config directory..."
-    FOUND_CONFIG=$(find /build -name "config" -type d -path "*/app-bundle/config" 2>/dev/null | head -1)
-    if [ -n "$FOUND_CONFIG" ]; then
-        GUI_SOURCE_DIR="$FOUND_CONFIG"
-        echo "✅ Found config directory via search: $GUI_SOURCE_DIR"
+    echo "❌ Config files not found in expected locations"
+    echo "🔍 Comprehensive search of Docker mount structure:"
+    find /build -name "start-kiosk.sh" -o -name "xorg.conf.d" -o -name "*.service" 2>/dev/null | head -10
+    
+    # Try to find any directory containing start-kiosk.sh
+    KIOSK_FILE=$(find /build -name "start-kiosk.sh" -type f 2>/dev/null | head -1)
+    if [ -n "$KIOSK_FILE" ]; then
+        GUI_SOURCE_DIR=$(dirname "$KIOSK_FILE")
+        echo "✅ Found config files via search at: $GUI_SOURCE_DIR"
         echo "Contents:"
         ls -la "$GUI_SOURCE_DIR/" 2>/dev/null
     fi
@@ -730,7 +736,21 @@ if [ -n "$GUI_SOURCE_DIR" ] && [ -d "$GUI_SOURCE_DIR" ]; then
     if [ -d "$GUI_SOURCE_DIR/xorg.conf.d" ]; then
         mkdir -p "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d"
         cp -r "$GUI_SOURCE_DIR/xorg.conf.d"/* "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d/" 2>/dev/null || true
-        echo "✅ Copied xorg.conf.d"
+        echo "✅ Copied xorg.conf.d directory"
+        # Verify the specific file we need
+        if [ -f "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d/99-calibration.conf" ]; then
+            echo "✅ Verified 99-calibration.conf copied successfully"
+        else
+            echo "❌ CRITICAL: 99-calibration.conf not found after copying"
+            echo "Available files in xorg.conf.d:"
+            ls -la "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d/" 2>/dev/null || echo "Directory not accessible"
+            exit 1
+        fi
+    else
+        echo "❌ CRITICAL: xorg.conf.d directory not found in source"
+        echo "Available subdirectories in $GUI_SOURCE_DIR:"
+        ls -la "$GUI_SOURCE_DIR/" 2>/dev/null || echo "Source directory not accessible"
+        exit 1
     fi
     
     if [ -d "$GUI_SOURCE_DIR/udev" ]; then
@@ -1340,7 +1360,7 @@ echo "🖥️ Starting NFC Terminal Kiosk Mode (Fallback)..."
 export DISPLAY=:0
 xset -dpms; xset s off; xset s noblank
 xrandr --output HDMI-1 --rotate left 2>/dev/null || true
-xinput set-prop "ADS7846 Touchscreen" "Coordinate Transformation Matrix" 0 -1 1 1 0 0 0 0 1 2>/dev/null || true
+echo "✅ Touchscreen configured via original X11 config files from build-app-production.sh"
 unclutter -idle 1 &
 timeout=60; while [ $timeout -gt 0 ] && ! curl -f http://localhost:3000 >/dev/null 2>&1; do sleep 2; timeout=$((timeout-2)); done
 exec chromium-browser --kiosk --app=http://localhost:3000 --no-sandbox --disable-infobars --no-first-run --start-fullscreen --window-size=480,800 --window-position=0,0 --force-device-scale-factor=1 --disable-background-color --hide-scrollbars --overscroll-history-navigation=0 --disable-pinch
