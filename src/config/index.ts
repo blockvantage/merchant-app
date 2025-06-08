@@ -114,19 +114,8 @@ export const SUPPORTED_CHAINS: ChainConfig[] = [
 // Legacy single-chain config (deprecated - use SUPPORTED_CHAINS)
 export const ALCHEMY_BASE_URL = `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`;
 
-// CoinGecko API URLs
-export const COINGECKO_TOKEN_PRICE_URL = 'https://api.coingecko.com/api/v3/simple/token_price';
-export const COINGECKO_ETH_PRICE_URL = 'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd';
-
-// Multi-chain CoinGecko platform mappings
-export const COINGECKO_PLATFORMS: {[chainName: string]: string} = {
-  'ethereum': 'ethereum',
-  'base': 'base',
-  'arbitrum': 'arbitrum-one', 
-  'optimism': 'optimistic-ethereum',
-  'polygon': 'polygon-pos',
-  'starknet': 'starknet'
-};
+// Alchemy Prices API base URL
+export const ALCHEMY_PRICES_API_BASE_URL = 'https://api.g.alchemy.com/prices/v1';
 
 export const config = {
     ALCHEMY_API_KEY: process.env.ALCHEMY_API_KEY || '',

@@ -27,7 +27,7 @@ export class PaymentService {
       return `ethereum:${RECIPIENT_ADDRESS}@${chainId}?value=${amountInSmallestUnits}`;
     } else {
       // ERC-20 token payment request with chain ID
-      // Format: ethereum:<tokenAddress>@<chainId>/transfer?address=<recipient>&uint256=<amount>
+      // Format: ethereum:<recipient>@<chainId>/transfer?address=<tokenContract>&uint256=<amount>
       return `ethereum:${tokenAddress}@${chainId}/transfer?address=${RECIPIENT_ADDRESS}&uint256=${amountInSmallestUnits}`;
     }
   }
@@ -94,14 +94,15 @@ export class PaymentService {
       
       console.log(`📡 NDEF Message (${ndefMessage.length} bytes): ${ndefMessage.toString('hex')}`);
       
-      // Create the complete APDU: PAYMENT command + NDEF data (no explicit length)
+      // Create the complete APDU: PAYMENT command + length + NDEF data
       const completeApdu = Buffer.concat([
-        PAYMENT.slice(0, 4), // Command (80CF0000) 
-        ndefMessage          // NDEF formatted payment request
+        PAYMENT.slice(0, 4),           // Command (80CF0000) 
+        Buffer.from([ndefMessage.length]), // Length of NDEF data
+        ndefMessage                    // NDEF formatted payment request
       ]);
       
-      console.log(`📡 Sending APDU with NDEF: ${completeApdu.toString('hex')}`);
-      console.log(`📡 APDU breakdown: Command=${PAYMENT.slice(0,4).toString('hex')} Data=${ndefMessage.toString('hex')}`);
+      console.log(`📡 Sending APDU with NDEF length: ${completeApdu.toString('hex')}`);
+      console.log(`📡 APDU breakdown: Command=${PAYMENT.slice(0,4).toString('hex')} Length=${ndefMessage.length.toString(16).padStart(2,'0')} Data=${ndefMessage.toString('hex')}`);
       
       // Send the complete APDU with the NDEF payment request
       // @ts-expect-error Argument of type '{}' is not assignable to parameter of type 'never'.

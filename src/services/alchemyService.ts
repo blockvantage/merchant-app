@@ -259,21 +259,30 @@ export class AlchemyService {
         })
       });
 
-      if (!response.ok) return [];
+      if (!response.ok) {
+        console.log(`❌ Token balance fetch failed for ${chain.displayName}: ${response.status}`);
+        return [];
+      }
 
       const data = await response.json() as any;
-      if (!data.result?.tokenBalances) return [];
+      
+      if (!data.result?.tokenBalances) {
+        return [];
+      }
 
-      const nonZeroBalances = data.result.tokenBalances.filter((token: AlchemyTokenBalance) => 
-        token.tokenBalance && token.tokenBalance !== '0x0'
-      );
+      const nonZeroBalances = data.result.tokenBalances.filter((token: AlchemyTokenBalance) => {
+        return token.tokenBalance && token.tokenBalance !== '0x0';
+      });
 
-      if (nonZeroBalances.length === 0) return [];
+      if (nonZeroBalances.length === 0) {
+        return [];
+      }
 
+      console.log(`✅ Found ${nonZeroBalances.length} tokens on ${chain.displayName}`);
       return await this.processTokenBalances(nonZeroBalances, chain);
 
     } catch (error) {
-      console.error(`Error fetching ${chain.displayName} token balances:`, error);
+      console.error(`❌ Error fetching ${chain.displayName} token balances:`, error);
       return [];
     }
   }
@@ -285,43 +294,74 @@ export class AlchemyService {
     try {
       const tokenAddresses = nonZeroBalances.map((token) => token.contractAddress);
       
-      // Fetch metadata and prices in parallel
-      const [metadataResponse, tokenPrices] = await Promise.all([
-        fetch(chain.alchemyUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 3,
-            method: 'alchemy_getTokenMetadata',
-            params: tokenAddresses
-          })
-        }),
-        PriceService.getTokenPricesForChain(tokenAddresses, chain.name)
-      ]);
-
-      if (!metadataResponse.ok) return [];
-
-      const metadataData = await metadataResponse.json() as any;
+      // Fetch prices first
+      const tokenPrices = await PriceService.getTokenPricesForChain(tokenAddresses, chain.name);
+      
+      // Fetch metadata for each token individually (alchemy_getTokenMetadata doesn't support batching)
+      const metadataPromises = tokenAddresses.map(async (address, index) => {
+        try {
+          const response = await fetch(chain.alchemyUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: index + 10,
+              method: 'alchemy_getTokenMetadata',
+              params: [address]
+            })
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            return { address: address.toLowerCase(), metadata: data.result };
+          } else {
+            return { address: address.toLowerCase(), metadata: null };
+          }
+        } catch (error) {
+          return { address: address.toLowerCase(), metadata: null };
+        }
+      });
+      
+      const metadataResults = await Promise.all(metadataPromises);
+      
+      // Create metadata lookup map
+      const metadataMap: {[address: string]: any} = {};
+      metadataResults.forEach(result => {
+        metadataMap[result.address] = result.metadata;
+      });
+      
       const tokensWithPrices: TokenWithPrice[] = [];
       
       nonZeroBalances.forEach((token, index) => {
         try {
           const balance = parseInt(token.tokenBalance, 16);
-          const metadata: AlchemyTokenMetadata = metadataData.result?.[index];
-          const decimals = metadata?.decimals || 18;
-          const symbol = metadata?.symbol || 'UNKNOWN';
-          const name = metadata?.name || 'Unknown Token';
           const contractAddress = token.contractAddress.toLowerCase();
+          
+          // Get metadata with fallback values
+          const metadata = metadataMap[contractAddress];
+          let decimals: number;
+          let symbol: string;
+          let name: string;
+
+          if (metadata) {
+            decimals = metadata.decimals || 18;
+            symbol = metadata.symbol || 'UNKNOWN';
+            name = metadata.name || 'Unknown Token';
+          } else {
+            // Fallback values when metadata is unavailable
+            decimals = this.getFallbackDecimals(contractAddress, chain.id);
+            symbol = this.getFallbackSymbol(contractAddress, chain.id);
+            name = this.getFallbackName(contractAddress, chain.id);
+          }
           
           const formattedBalance = balance / Math.pow(10, decimals);
           const priceUSD = tokenPrices[contractAddress] || 0;
           const valueUSD = formattedBalance * priceUSD;
           
           if (formattedBalance > 0) {
-            tokensWithPrices.push({
+            const tokenWithPrice = {
               address: token.contractAddress,
               symbol,
               name: `${name} (${chain.displayName})`,
@@ -333,19 +373,90 @@ export class AlchemyService {
               chainName: chain.name,
               chainDisplayName: chain.displayName,
               isNativeToken: false
-            });
+            };
+            
+            tokensWithPrices.push(tokenWithPrice);
           }
         } catch (e) {
-          console.log(`Error processing token ${token.contractAddress} on ${chain.displayName}`);
+          console.log(`❌ Error processing token ${token.contractAddress} on ${chain.displayName}`);
         }
       });
 
       return tokensWithPrices;
 
     } catch (error) {
-      console.error(`Error processing ${chain.displayName} token balances:`, error);
+      console.error(`❌ Error processing ${chain.displayName} token balances:`, error);
       return [];
     }
+  }
+
+  /**
+   * Get fallback decimals for known tokens when metadata service fails
+   */
+  private static getFallbackDecimals(contractAddress: string, chainId: number): number {
+    const knownTokens: {[key: string]: {[address: string]: number}} = {
+      '8453': { // Base
+        '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': 6, // USDC
+        '0x4200000000000000000000000000000000000006': 18, // WETH
+        '0xca72827a3d211cfd8f6b00ac98824872b72cab49': 6,  // cbETH
+      },
+      '42161': { // Arbitrum
+        '0xaf88d065e77c8cc2239327c5edb3a432268e5831': 6, // USDC
+        '0x82af49447d8a07e3bd95bd0d56f35241523fbab1': 18, // WETH
+      },
+      '137': { // Polygon
+        '0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270': 18, // WMATIC
+        '0x7ceb23fd6bc0add59e62ac25578270cff1b9f619': 18, // WETH
+      }
+    };
+    
+    return knownTokens[chainId.toString()]?.[contractAddress] || 18;
+  }
+
+  /**
+   * Get fallback symbol for known tokens when metadata service fails
+   */
+  private static getFallbackSymbol(contractAddress: string, chainId: number): string {
+    const knownTokens: {[key: string]: {[address: string]: string}} = {
+      '8453': { // Base
+        '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': 'USDC',
+        '0x4200000000000000000000000000000000000006': 'WETH',
+        '0xca72827a3d211cfd8f6b00ac98824872b72cab49': 'cbETH',
+      },
+      '42161': { // Arbitrum
+        '0xaf88d065e77c8cc2239327c5edb3a432268e5831': 'USDC',
+        '0x82af49447d8a07e3bd95bd0d56f35241523fbab1': 'WETH',
+      },
+      '137': { // Polygon
+        '0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270': 'WMATIC',
+        '0x7ceb23fd6bc0add59e62ac25578270cff1b9f619': 'WETH',
+      }
+    };
+    
+    return knownTokens[chainId.toString()]?.[contractAddress] || `TOKEN_${contractAddress.slice(0, 6)}`;
+  }
+
+  /**
+   * Get fallback name for known tokens when metadata service fails
+   */
+  private static getFallbackName(contractAddress: string, chainId: number): string {
+    const knownTokens: {[key: string]: {[address: string]: string}} = {
+      '8453': { // Base
+        '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': 'USD Coin',
+        '0x4200000000000000000000000000000000000006': 'Wrapped Ether',
+        '0xca72827a3d211cfd8f6b00ac98824872b72cab49': 'Coinbase Wrapped Staked ETH',
+      },
+      '42161': { // Arbitrum
+        '0xaf88d065e77c8cc2239327c5edb3a432268e5831': 'USD Coin',
+        '0x82af49447d8a07e3bd95bd0d56f35241523fbab1': 'Wrapped Ether',
+      },
+      '137': { // Polygon
+        '0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270': 'Wrapped Matic',
+        '0x7ceb23fd6bc0add59e62ac25578270cff1b9f619': 'Wrapped Ether',
+      }
+    };
+    
+    return knownTokens[chainId.toString()]?.[contractAddress] || `Unknown Token`;
   }
 
   /**
@@ -394,117 +505,204 @@ export class AlchemyService {
   }
 
   /**
-   * Monitor transactions on a specific chain using WebSocket subscriptions
-   * Now supports multiple chains including Base, Ethereum, Arbitrum, and Optimism
+   * Monitor transactions to a specific address for both ETH and ERC-20 token transfers
    */
   static async monitorTransactions(
-    address: string,
-    callback: (tx: Transaction) => void,
+    merchantAddress: string,
+    callback: (tx: Transaction & { tokenSymbol?: string, tokenAddress?: string, decimals?: number }) => void,
     chainId: number = 1,
     minimumValueWei: number = 0
   ): Promise<() => void> {
     if (!this.isInitialized) this.initialize();
 
-    if (!this.isEthereumAddress(address)) {
-      throw new Error(`Invalid Ethereum address: ${address}`);
-    }
-
     const chainConfig = this.getChainConfig(chainId);
     if (!chainConfig) {
-      throw new Error(`Unsupported chain ID: ${chainId}. Supported chains: ${SUPPORTED_CHAINS.map(c => `${c.displayName} (${c.id})`).join(', ')}`);
+      throw new Error(`Chain ID ${chainId} is not supported`);
     }
 
     const alchemy = this.alchemyInstances.get(chainId);
     if (!alchemy) {
-      throw new Error(`No Alchemy instance found for chain ID: ${chainId} (${chainConfig.displayName})`);
+      throw new Error(`Alchemy instance not found for chain ID ${chainId}`);
     }
 
-    const subscriptionKey = `${address}-${chainId}`;
+    const subscriptionKey = `${merchantAddress}-${chainId}`;
+    console.log(`🔍 Starting transaction monitoring for address: ${merchantAddress}`);
+    console.log(`⛓️ Monitoring ${chainConfig.displayName} for incoming transactions`);
 
     try {
-      console.log(`🔍 Starting transaction monitoring for address: ${address}`);
-      console.log(`⛓️ Monitoring ${chainConfig.displayName} (Chain ID: ${chainId}) for incoming transactions`);
-      console.log(`📡 Listening for mined transactions to address: ${address}`);
-      if (minimumValueWei > 0) {
-        console.log(`💰 Minimum transaction value: ${minimumValueWei / 1e18} ETH (${minimumValueWei} wei)`);
-      }
-      
-      // Subscribe to mined transactions for this specific chain
-      const subscription = await alchemy.ws.on(
+      // Monitor all transactions to the merchant address (for ETH transfers)
+      const ethSubscription = alchemy.ws.on(
         {
           method: AlchemySubscription.MINED_TRANSACTIONS,
-          addresses: [{ to: address } as AlchemyMinedTransactionsAddress],
-          includeRemoved: false,
-          hashesOnly: false
+          addresses: [{ to: merchantAddress }]
         },
-        async (tx: any) => {
+        async (transaction: any) => {
           try {
-            // Handle different response formats from Alchemy
-            const transaction = tx.transaction || tx;
-            
-            if (!transaction.hash || !transaction.from || !transaction.to) {
-              console.error('Invalid transaction data:', transaction);
-              return;
-            }
-
-            const valueInWei = parseInt(transaction.value?.toString() || '0', 16);
+            const valueInWei = parseInt(transaction.value || '0x0', 16);
             const valueInEth = valueInWei / 1e18;
-            
-            const explorerUrl = AlchemyService.getBlockExplorerUrl(chainId, transaction.hash);
-            
-            console.log(`🔔 Transaction detected on ${chainConfig.displayName}:`, {
+            const explorerUrl = this.getBlockExplorerUrl(chainId, transaction.hash);
+
+            console.log(`📡 ETH transaction detected on ${chainConfig.displayName}:`, {
               hash: transaction.hash,
               from: transaction.from,
               to: transaction.to,
               value: `${valueInEth} ETH (${valueInWei} wei)`,
               blockNumber: transaction.blockNumber
             });
-            console.log(`🔗 View transaction: ${explorerUrl}`);
 
-            // Check minimum value requirement
             if (minimumValueWei > 0 && valueInWei < minimumValueWei) {
-              console.log(`⚠️ Transaction below minimum value: ${valueInEth} ETH < ${minimumValueWei / 1e18} ETH`);
+              console.log(`⚠️ ETH transaction below minimum value: ${valueInEth} ETH < ${minimumValueWei / 1e18} ETH`);
               return;
             }
 
-            // Get transaction receipt to verify it's successfully mined
-            const receipt = await alchemy.core.getTransactionReceipt(transaction.hash);
-            if (receipt && receipt.status === 1) {
-              console.log(`✅ Transaction confirmed on ${chainConfig.displayName}: ${transaction.hash}`);
-              console.log(`🔗 View on block explorer: ${explorerUrl}`);
-              console.log(`💎 Payment details: ${valueInEth} ETH from ${transaction.from} to ${transaction.to}`);
-              
-              callback({
-                hash: transaction.hash,
-                value: valueInWei,
-                from: transaction.from,
-                to: transaction.to,
-              });
-            } else {
-              console.log(`⚠️ Transaction failed or still pending: ${transaction.hash}, status: ${receipt?.status}`);
+            if (valueInWei > 0) {
+              const receipt = await alchemy.core.getTransactionReceipt(transaction.hash);
+              if (receipt && receipt.status === 1) {
+                console.log(`✅ ETH payment confirmed on ${chainConfig.displayName}: ${valueInEth} ETH`);
+                
+                callback({
+                  hash: transaction.hash,
+                  value: valueInWei,
+                  from: transaction.from,
+                  to: transaction.to,
+                  tokenSymbol: chainConfig.nativeToken.symbol,
+                  tokenAddress: '0x0000000000000000000000000000000000000000',
+                  decimals: 18
+                });
+              }
             }
           } catch (error) {
-            console.error(`Error processing transaction on ${chainConfig.displayName}:`, error);
+            console.error(`Error processing ETH transaction on ${chainConfig.displayName}:`, error);
           }
         }
       );
 
-      // Store the subscription for cleanup
+      // Monitor ERC-20 token transfers by watching Transfer events to the merchant address
+      const tokenSubscription = alchemy.ws.on(
+        {
+          method: AlchemySubscription.MINED_TRANSACTIONS,
+          includeRemoved: false,
+          hashesOnly: false
+        },
+        async (transaction: any) => {
+          try {
+            // Get transaction receipt to check logs for Transfer events
+            const receipt = await alchemy.core.getTransactionReceipt(transaction.hash);
+            if (!receipt || receipt.status !== 1 || !receipt.logs) {
+              return;
+            }
+
+            // Look for ERC-20 Transfer events to the merchant address
+            // Transfer event signature: Transfer(address indexed from, address indexed to, uint256 value)
+            const transferEventSignature = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+            
+            for (const log of receipt.logs) {
+              if (log.topics && log.topics[0] === transferEventSignature && log.topics.length >= 3) {
+                // Check if the 'to' address (topics[2]) matches our merchant address
+                const toAddress = '0x' + log.topics[2].slice(-40); // Last 40 hex chars (20 bytes)
+                
+                if (toAddress.toLowerCase() === merchantAddress.toLowerCase()) {
+                  const tokenAddress = log.address;
+                  const transferValue = parseInt(log.data || '0x0', 16);
+                  
+                  console.log(`📡 ERC-20 transfer detected on ${chainConfig.displayName}:`, {
+                    hash: transaction.hash,
+                    tokenAddress,
+                    from: '0x' + log.topics[1].slice(-40),
+                    to: toAddress,
+                    rawValue: transferValue,
+                    blockNumber: transaction.blockNumber
+                  });
+
+                  // Get token metadata to determine decimals and symbol
+                  try {
+                    const metadataResponse = await fetch(chainConfig.alchemyUrl, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        jsonrpc: '2.0',
+                        id: 1,
+                        method: 'alchemy_getTokenMetadata',
+                        params: [tokenAddress]
+                      })
+                    });
+
+                    let decimals = 18;
+                    let symbol = 'TOKEN';
+                    
+                    if (metadataResponse.ok) {
+                      const metadataData = await metadataResponse.json();
+                      decimals = metadataData.result?.decimals || 18;
+                      symbol = metadataData.result?.symbol || 'TOKEN';
+                    } else {
+                      // Use fallback values
+                      decimals = this.getFallbackDecimals(tokenAddress.toLowerCase(), chainId);
+                      symbol = this.getFallbackSymbol(tokenAddress.toLowerCase(), chainId);
+                    }
+
+                    const formattedValue = transferValue / Math.pow(10, decimals);
+                    console.log(`✅ ${symbol} transfer confirmed on ${chainConfig.displayName}: ${formattedValue} ${symbol}`);
+
+                    callback({
+                      hash: transaction.hash,
+                      value: transferValue, // Keep raw value for consistency
+                      from: '0x' + log.topics[1].slice(-40),
+                      to: toAddress,
+                      tokenSymbol: symbol,
+                      tokenAddress: tokenAddress,
+                      decimals: decimals
+                    });
+
+                  } catch (metadataError) {
+                    console.error(`Error fetching token metadata for ${tokenAddress}:`, metadataError);
+                    
+                    // Still report the transfer with fallback values
+                    const decimals = this.getFallbackDecimals(tokenAddress.toLowerCase(), chainId);
+                    const symbol = this.getFallbackSymbol(tokenAddress.toLowerCase(), chainId);
+                    const formattedValue = transferValue / Math.pow(10, decimals);
+                    
+                    console.log(`✅ ${symbol} transfer confirmed on ${chainConfig.displayName}: ${formattedValue} ${symbol} (fallback metadata)`);
+
+                    callback({
+                      hash: transaction.hash,
+                      value: transferValue,
+                      from: '0x' + log.topics[1].slice(-40),
+                      to: toAddress,
+                      tokenSymbol: symbol,
+                      tokenAddress: tokenAddress,
+                      decimals: decimals
+                    });
+                  }
+                }
+              }
+            }
+          } catch (error) {
+            console.error(`Error processing token transaction on ${chainConfig.displayName}:`, error);
+          }
+        }
+      );
+
+      // Store both subscriptions for cleanup
       this.activeSubscriptions.set(subscriptionKey, {
         alchemy,
-        subscription,
+        subscription: { eth: ethSubscription, token: tokenSubscription },
         chainConfig
       });
 
       console.log(`✅ Transaction monitoring subscription established for ${chainConfig.displayName}`);
-      console.log('🎯 Ready to detect payments...');
+      console.log('🎯 Ready to detect ETH and ERC-20 token payments...');
       
       // Return unsubscribe function
       return () => {
         console.log(`🔌 Unsubscribing from transaction monitoring on ${chainConfig.displayName}`);
         const storedSubscription = this.activeSubscriptions.get(subscriptionKey);
         if (storedSubscription) {
-          storedSubscription.subscription.removeAllListeners();
+          if (storedSubscription.subscription.eth) {
+            storedSubscription.subscription.eth.removeAllListeners();
+          }
+          if (storedSubscription.subscription.token) {
+            storedSubscription.subscription.token.removeAllListeners();
+          }
           this.activeSubscriptions.delete(subscriptionKey);
         }
       };
@@ -582,7 +780,12 @@ export class AlchemyService {
   static cleanup(): void {
     console.log(`🧹 Cleaning up ${this.activeSubscriptions.size} active subscriptions`);
     this.activeSubscriptions.forEach((subscription, key) => {
-      subscription.subscription.removeAllListeners();
+      if (subscription.subscription.eth) {
+        subscription.subscription.eth.removeAllListeners();
+      }
+      if (subscription.subscription.token) {
+        subscription.subscription.token.removeAllListeners();
+      }
     });
     this.activeSubscriptions.clear();
   }
