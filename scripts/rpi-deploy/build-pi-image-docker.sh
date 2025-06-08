@@ -338,6 +338,178 @@ echo "Verifying application installation..."
 ls -la "$MOUNT_ROOT/opt/nfc-terminal/" || { echo "ERROR: Failed to verify app installation"; exit 1; }
 echo "✅ Application files installed successfully"
 
+# ========================================
+# PRE-COPY PHASE: Copy GUI config files from Docker mount to image
+# ========================================
+echo "=========================================="
+echo "🔍 PRE-COPY PHASE: Finding original config files"
+echo "=========================================="
+echo "📋 Pre-copying GUI config files to image..."
+mkdir -p "$MOUNT_ROOT/tmp/gui-config"
+
+# Force sync to ensure Docker mount is stable
+sync
+sleep 1
+
+# Debug: Show what's actually in the Docker mount with error checking
+echo "🔍 Debugging Docker mount structure:"
+echo "Working directory: $(pwd)"
+
+echo "Contents of /build:"
+if ls -la /build/ 2>/dev/null; then
+    echo "✅ /build accessible"
+else
+    echo "❌ /build not found"
+    exit 1
+fi
+
+echo "Contents of /build/build:"
+if ls -la /build/build/ 2>/dev/null; then
+    echo "✅ /build/build accessible"
+else
+    echo "❌ /build/build not found"
+    exit 1
+fi
+
+echo "Looking for app-bundle:"
+if find /build -name "app-bundle" -type d 2>/dev/null | head -3; then
+    echo "✅ app-bundle found"
+else
+    echo "❌ app-bundle not found"
+    exit 1
+fi
+
+echo "Looking for config directories:"
+if find /build -name "config" -type d 2>/dev/null | head -3; then
+    echo "✅ config directories found"
+else
+    echo "❌ config directories not found"
+    exit 1
+fi
+
+# Set GUI_SOURCE_DIR based on what we found
+GUI_SOURCE_DIR="/build/build/app-bundle/config"
+echo "✅ Setting GUI_SOURCE_DIR to: $GUI_SOURCE_DIR"
+
+# Debug: Check exact paths we know from mount test  
+echo "Testing /build/build/app-bundle/config/:"
+if ls -la "/build/build/app-bundle/config/" 2>/dev/null; then
+    echo "✅ Config directory accessible"
+else
+    echo "❌ Path not found"
+    exit 1
+fi
+
+echo "Testing /build/build/app-bundle/config/start-kiosk.sh:"
+if [ -f "/build/build/app-bundle/config/start-kiosk.sh" ]; then
+    echo "✅ start-kiosk.sh exists"
+    echo "File size: $(wc -c < "/build/build/app-bundle/config/start-kiosk.sh") bytes"
+else
+    echo "❌ start-kiosk.sh missing"
+    exit 1
+fi
+
+echo "Testing /build/build/app-bundle/config/xorg.conf.d/:"
+if [ -d "/build/build/app-bundle/config/xorg.conf.d" ]; then
+    echo "✅ xorg.conf.d exists"
+    echo "Contents:"
+    ls -la "/build/build/app-bundle/config/xorg.conf.d/" 2>/dev/null || echo "Cannot list contents"
+else
+    echo "❌ xorg.conf.d missing"
+    exit 1
+fi
+
+echo "📋 Copying GUI config files to image..."
+
+# Copy specific files we need
+for file in start-kiosk.sh xinitrc calibrate-touch.sh connect-wifi.sh debug-gui.sh bashrc-append; do
+    if [ -f "$GUI_SOURCE_DIR/$file" ]; then
+        echo "Copying $file..."
+        if cp "$GUI_SOURCE_DIR/$file" "$MOUNT_ROOT/tmp/gui-config/"; then
+            echo "✅ Copied $file successfully"
+        else
+            echo "❌ Failed to copy $file"
+            exit 1
+        fi
+    else
+        echo "⚠️ $file not found in source"
+    fi
+done
+
+# Copy xorg.conf.d subdirectory - this is critical for touchscreen
+echo "🔍 Copying xorg.conf.d directory..."
+if [ -d "$GUI_SOURCE_DIR/xorg.conf.d" ]; then
+    echo "Creating target directory..."
+    mkdir -p "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d"
+    
+    echo "Copying xorg.conf.d contents..."
+    if cp -r "$GUI_SOURCE_DIR/xorg.conf.d"/* "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d/" 2>/dev/null; then
+        echo "✅ Copied xorg.conf.d directory successfully"
+    else
+        echo "❌ Failed to copy xorg.conf.d contents"
+        exit 1
+    fi
+    
+    # Verify the specific file we need
+    echo "🔍 Verifying 99-calibration.conf..."
+    if [ -f "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d/99-calibration.conf" ]; then
+        echo "✅ Verified 99-calibration.conf copied successfully"
+        echo "File size: $(wc -c < "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d/99-calibration.conf") bytes"
+        echo "First few lines:"
+        head -3 "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d/99-calibration.conf" 2>/dev/null || echo "Cannot read file"
+    else
+        echo "❌ CRITICAL: 99-calibration.conf not found after copying"
+        echo "Available files in target xorg.conf.d:"
+        ls -la "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d/" 2>/dev/null || echo "Directory not accessible"
+        exit 1
+    fi
+else
+    echo "❌ CRITICAL: xorg.conf.d directory not found in source"
+    echo "Available subdirectories in $GUI_SOURCE_DIR:"
+    ls -la "$GUI_SOURCE_DIR/" 2>/dev/null || echo "Source directory not accessible"
+    exit 1
+fi
+
+# Copy udev rules if they exist
+if [ -d "$GUI_SOURCE_DIR/udev" ]; then
+    echo "Copying udev rules..."
+    mkdir -p "$MOUNT_ROOT/tmp/gui-config/udev"
+    cp -r "$GUI_SOURCE_DIR/udev"/* "$MOUNT_ROOT/tmp/gui-config/udev/" 2>/dev/null || true
+    echo "✅ Copied udev rules"
+fi
+
+# Copy service files
+echo "Copying service files..."
+for service in "$GUI_SOURCE_DIR"/*.service; do
+    if [ -f "$service" ]; then
+        if cp "$service" "$MOUNT_ROOT/tmp/gui-config/"; then
+            echo "✅ Copied $(basename "$service")"
+        else
+            echo "❌ Failed to copy $(basename "$service")"
+        fi
+    fi
+done
+
+echo "✅ GUI config files copied to image"
+echo "Final contents of gui-config:"
+ls -la "$MOUNT_ROOT/tmp/gui-config/" 2>/dev/null || echo "Directory listing failed"
+
+# Final verification of all critical files
+echo "🔍 Final verification of copied files:"
+CRITICAL_FILES=("start-kiosk.sh" "xinitrc" "xorg.conf.d/99-calibration.conf")
+for file in "${CRITICAL_FILES[@]}"; do
+    if [ -f "$MOUNT_ROOT/tmp/gui-config/$file" ]; then
+        echo "✅ $file copied successfully ($(wc -c < "$MOUNT_ROOT/tmp/gui-config/$file") bytes)"
+    else
+        echo "❌ CRITICAL: $file missing after copy"
+        exit 1
+    fi
+done
+
+echo "=========================================="
+echo "🔍 PRE-COPY PHASE COMPLETE - ALL CRITICAL FILES VERIFIED"
+echo "=========================================="
+
 # Create environment file with real values
 cat > "$MOUNT_ROOT/opt/nfc-terminal/.env" << ENV_FILE
 NODE_ENV=production
@@ -656,141 +828,7 @@ if [ "$SSH_ENABLE_PASSWORD_AUTH" = "true" ]; then
     sed -i 's/UsePAM no/UsePAM yes/' "$MOUNT_ROOT/etc/ssh/sshd_config"
 fi
 
-# Copy GUI config files BEFORE chroot (where Docker volume mounts work)
-echo "=========================================="
-echo "🔍 PRE-COPY PHASE: Finding original config files"
-echo "=========================================="
-echo "📋 Pre-copying GUI config files to image..."
-mkdir -p "$MOUNT_ROOT/tmp/gui-config"
 
-# Debug: Show what's actually in the Docker mount
-echo "🔍 Debugging Docker mount structure:"
-echo "Working directory: $(pwd)"
-echo "Mount point exists: $MOUNT_ROOT"
-echo "Contents of /build:"
-ls -la /build/ 2>/dev/null || echo "❌ /build not found"
-echo "Contents of /build/build:"
-ls -la /build/build/ 2>/dev/null || echo "❌ /build/build not found"
-echo "Looking for app-bundle:"
-find /build -name "app-bundle" -type d 2>/dev/null || echo "❌ app-bundle not found"
-echo "Looking for config directories:"
-find /build -name "config" -type d 2>/dev/null || echo "❌ config directories not found"
-echo "Looking for specific GUI files:"
-find /build -name "start-kiosk.sh" 2>/dev/null || echo "❌ start-kiosk.sh not found"
-echo "Looking for service files:"
-find /build -name "*.service" 2>/dev/null | head -5 || echo "❌ service files not found"
-
-# Based on the mount test, check where files actually are
-GUI_SOURCE_DIR=""
-echo "🔍 Checking actual mount structure..."
-echo "🔍 DEBUG: Testing direct paths..."
-
-# Debug: Check exact paths we know from mount test
-echo "Testing /build/build/app-bundle/config/:"
-ls -la "/build/build/app-bundle/config/" 2>/dev/null || echo "❌ Path not found"
-echo "Testing /build/build/app-bundle/config/start-kiosk.sh:"
-[ -f "/build/build/app-bundle/config/start-kiosk.sh" ] && echo "✅ start-kiosk.sh exists" || echo "❌ start-kiosk.sh missing"
-echo "Testing /build/build/app-bundle/config/xorg.conf.d/:"
-[ -d "/build/build/app-bundle/config/xorg.conf.d" ] && echo "✅ xorg.conf.d exists" || echo "❌ xorg.conf.d missing"
-
-# Set GUI_SOURCE_DIR based on what we found
-if [ -f "/build/build/app-bundle/config/start-kiosk.sh" ]; then
-    GUI_SOURCE_DIR="/build/build/app-bundle/config"
-    echo "✅ Found config files in standard path: $GUI_SOURCE_DIR"
-    echo "Contents of $GUI_SOURCE_DIR:"
-    ls -la "$GUI_SOURCE_DIR/" 2>/dev/null
-else
-    echo "❌ Config files not found in expected location"
-fi
-
-# If still not found, do comprehensive search
-if [ -z "$GUI_SOURCE_DIR" ]; then
-    echo "❌ Config files not found in expected locations"
-    echo "🔍 Comprehensive search of Docker mount structure:"
-    find /build -name "start-kiosk.sh" -o -name "xorg.conf.d" -o -name "*.service" 2>/dev/null | head -10
-    
-    # Try to find any directory containing start-kiosk.sh
-    KIOSK_FILE=$(find /build -name "start-kiosk.sh" -type f 2>/dev/null | head -1)
-    if [ -n "$KIOSK_FILE" ]; then
-        GUI_SOURCE_DIR=$(dirname "$KIOSK_FILE")
-        echo "✅ Found config files via search at: $GUI_SOURCE_DIR"
-        echo "Contents:"
-        ls -la "$GUI_SOURCE_DIR/" 2>/dev/null
-    fi
-fi
-
-if [ -n "$GUI_SOURCE_DIR" ] && [ -d "$GUI_SOURCE_DIR" ]; then
-    echo "📋 Copying GUI config files to image..."
-    
-    # Copy specific files we need
-    for file in start-kiosk.sh xinitrc calibrate-touch.sh connect-wifi.sh debug-gui.sh bashrc-append; do
-        if [ -f "$GUI_SOURCE_DIR/$file" ]; then
-            cp "$GUI_SOURCE_DIR/$file" "$MOUNT_ROOT/tmp/gui-config/"
-            echo "✅ Copied $file"
-        else
-            echo "⚠️ $file not found in source"
-        fi
-    done
-    
-    # Copy subdirectories if they exist
-    if [ -d "$GUI_SOURCE_DIR/xorg.conf.d" ]; then
-        mkdir -p "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d"
-        cp -r "$GUI_SOURCE_DIR/xorg.conf.d"/* "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d/" 2>/dev/null || true
-        echo "✅ Copied xorg.conf.d directory"
-        # Verify the specific file we need
-        if [ -f "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d/99-calibration.conf" ]; then
-            echo "✅ Verified 99-calibration.conf copied successfully"
-        else
-            echo "❌ CRITICAL: 99-calibration.conf not found after copying"
-            echo "Available files in xorg.conf.d:"
-            ls -la "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d/" 2>/dev/null || echo "Directory not accessible"
-            exit 1
-        fi
-    else
-        echo "❌ CRITICAL: xorg.conf.d directory not found in source"
-        echo "Available subdirectories in $GUI_SOURCE_DIR:"
-        ls -la "$GUI_SOURCE_DIR/" 2>/dev/null || echo "Source directory not accessible"
-        exit 1
-    fi
-    
-    if [ -d "$GUI_SOURCE_DIR/udev" ]; then
-        mkdir -p "$MOUNT_ROOT/tmp/gui-config/udev"
-        cp -r "$GUI_SOURCE_DIR/udev"/* "$MOUNT_ROOT/tmp/gui-config/udev/" 2>/dev/null || true
-        echo "✅ Copied udev rules"
-    fi
-    
-    # Copy service files
-    for service in "$GUI_SOURCE_DIR"/*.service; do
-        if [ -f "$service" ]; then
-            cp "$service" "$MOUNT_ROOT/tmp/gui-config/"
-            echo "✅ Copied $(basename "$service")"
-        fi
-    done
-    
-    echo "✅ GUI config files copied to image"
-    echo "Final contents of gui-config:"
-    ls -la "$MOUNT_ROOT/tmp/gui-config/" 2>/dev/null || echo "Directory listing failed"
-    
-    # Verify files were actually copied
-    echo "🔍 Verifying copied files:"
-    for file in start-kiosk.sh xinitrc; do
-        if [ -f "$MOUNT_ROOT/tmp/gui-config/$file" ]; then
-            echo "✅ $file copied successfully ($(wc -c < "$MOUNT_ROOT/tmp/gui-config/$file") bytes)"
-        else
-            echo "❌ $file missing after copy"
-        fi
-    done
-else
-    echo "❌ No source config directory found, GUI files will be created as fallbacks in chroot"
-    echo "🔍 This means either:"
-    echo "   1. Production build didn't create config files"
-    echo "   2. Docker volume mount isn't working" 
-    echo "   3. Files are in a different location"
-fi
-
-echo "=========================================="
-echo "🔍 PRE-COPY PHASE COMPLETE"
-echo "=========================================="
 
 # Install pre-built user setup scripts
 echo "👤 Installing user setup scripts..."
