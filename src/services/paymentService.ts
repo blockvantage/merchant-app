@@ -140,7 +140,7 @@ export class PaymentService {
 
     if (viableTokens.length === 0) {
       console.log(`\n❌ No tokens found with sufficient balance for $${targetUSD} payment`);
-      throw new Error(`No tokens found with sufficient balance for $${targetUSD} payment`);
+      throw new Error(`Customer doesn't have enough funds`);
     }
 
     console.log(`\n💰 PAYMENT OPTIONS ($${targetUSD}):`);

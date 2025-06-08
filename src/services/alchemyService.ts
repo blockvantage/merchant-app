@@ -548,7 +548,7 @@ export class AlchemyService {
         const currentBlock = await alchemy.core.getBlockNumber();
         
         // Use a conservative approach - stay 2 blocks behind to avoid "past head" errors
-        const safeToBlock = Math.max(currentBlock - 2, lastCheckedBlock);
+        const safeToBlock = Math.max(currentBlock - 1, lastCheckedBlock);
         
         if (safeToBlock > lastCheckedBlock) {
           // Get asset transfers to the merchant address since the last checked block

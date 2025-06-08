@@ -76,6 +76,8 @@ export class NFCService {
       return;
     }
 
+    let processedAddress: string | null = null;
+
     try {
       // @ts-expect-error Argument of type '{}' is not assignable to parameter of type 'never'.
       const resp = await reader.transmit(GET, 256, {});
@@ -88,6 +90,11 @@ export class NFCService {
       const phoneResponse = resp.slice(0, -2).toString();
       console.log('📱 Phone says →', phoneResponse);
       
+      // Check if this is an Ethereum address so we can track it for cleanup
+      if (EthereumService.isEthereumAddress(phoneResponse)) {
+        processedAddress = EthereumService.normalizeEthereumAddress(phoneResponse);
+      }
+      
       if (this.walletScanArmed) {
         await this.processWalletScan(phoneResponse, reader);
       } else if (this.paymentArmed && this.currentPaymentAmount !== null) {
@@ -96,6 +103,12 @@ export class NFCService {
       
     } catch (e) {
       console.error('❌ Error processing card:', e);
+      
+      // Clean up any address that might be stuck in processing state
+      if (processedAddress) {
+        AddressProcessor.finishProcessing(processedAddress);
+      }
+      
       if (this.cardHandlerResolve) {
         this.cardHandlerResolve({ success: false, message: 'Error processing card', errorType: 'CARD_ERROR' });
         this.cardHandlerResolve = null;
@@ -116,15 +129,20 @@ export class NFCService {
       
       // Check if the address can be processed
       if (!AddressProcessor.canProcessAddress(ethAddress)) {
+        const blockReason = AddressProcessor.getProcessingBlockReason(ethAddress);
+        console.log(`🚫 Address ${ethAddress} cannot be processed: ${blockReason}`);
         if (this.cardHandlerResolve) {
-          this.cardHandlerResolve({ success: false, message: 'Address is already being processed', errorType: 'DUPLICATE_ADDRESS' });
+          this.cardHandlerResolve({ success: false, message: blockReason || 'Address cannot be processed', errorType: 'DUPLICATE_ADDRESS' });
           this.cardHandlerResolve = null;
         }
         return;
       }
       
       // Mark the address as being processed
+      console.log(`🔄 Starting to process address: ${ethAddress}`);
       AddressProcessor.startProcessing(ethAddress);
+      
+      let paymentSuccessful = false;
       
       try {
         // Fetch balances from Alchemy API across all supported chains
@@ -135,6 +153,8 @@ export class NFCService {
         
         // Update UI to show waiting for payment
         broadcast({ type: 'status', message: 'Waiting for payment...' });
+        
+        paymentSuccessful = true; // Payment request was sent successfully
         
         if (this.cardHandlerResolve) {
           this.cardHandlerResolve({ 
@@ -147,13 +167,29 @@ export class NFCService {
         
       } catch (balanceError: any) {
         console.error('💥 Error processing address balances/payment:', balanceError);
+        console.log(`🧹 Cleaning up address ${ethAddress} due to error: ${balanceError.message}`);
+        
+        paymentSuccessful = false;
+        
         if (this.cardHandlerResolve) {
-          this.cardHandlerResolve({ success: false, message: 'Error processing payment', errorType: 'PAYMENT_ERROR' });
+          // Check if this is an insufficient funds error and pass the specific message
+          const errorMessage = balanceError.message === "Customer doesn't have enough funds" 
+            ? balanceError.message 
+            : 'Error processing payment';
+          this.cardHandlerResolve({ success: false, message: errorMessage, errorType: 'PAYMENT_ERROR' });
           this.cardHandlerResolve = null;
         }
       } finally {
-        // Mark the address processing as complete (even if there was an error)
-        AddressProcessor.finishProcessing(ethAddress);
+        // Mark the address processing as complete
+        console.log(`🏁 Finishing processing for address: ${ethAddress} (successful: ${paymentSuccessful})`);
+        
+        if (paymentSuccessful) {
+          // Successful payment - apply cooldown to prevent spam
+          AddressProcessor.finishProcessing(ethAddress);
+        } else {
+          // Failed payment - no cooldown, allow immediate retry
+          AddressProcessor.finishProcessingWithoutCooldown(ethAddress);
+        }
       }
     } else {
       console.log('📱 Response is not an Ethereum address');
@@ -179,6 +215,9 @@ export class NFCService {
     this.paymentArmed = true;
     this.currentPaymentAmount = amount;
     console.log(`💰 NFCService: Armed for payment of $${amount.toFixed(2)}. Waiting for tap...`);
+    
+    // Debug: Show current address processing state
+    AddressProcessor.debugState();
     
     // Create a promise that will be resolved when a card is processed
     this.cardHandlerPromise = new Promise((resolve) => {
@@ -214,6 +253,11 @@ export class NFCService {
     this.currentPaymentAmount = null;
     this.cardHandlerPromise = null;
     this.cardHandlerResolve = null;
+    
+    // Clean up any stuck address processing states when disarming
+    // This is a safety measure to ensure addresses don't stay locked
+    console.log('🧹 Cleaning up any stuck address processing states...');
+    AddressProcessor.clearAllProcessing();
   }
 
   /**

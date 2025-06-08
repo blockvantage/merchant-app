@@ -250,7 +250,7 @@ const initiatePaymentHandler: AsyncRequestHandler = async (req, res) => {
     }
 
     console.log(`💸 Payment initiated for $${amount.toFixed(2)} from Web UI to ${merchantAddress}`);
-    broadcast({ type: 'status', message: `Preparing for $${amount.toFixed(2)} payment...` });
+    broadcast({ type: 'status', message: `Waiting for phone tap...` });
 
     try {
         // This method in App will trigger NFCService.armForPaymentAndAwaitTap

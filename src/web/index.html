@@ -498,7 +498,7 @@
     <div class="nfc-screen" id="nfcScreen">
         <div class="spinner"></div>
         <div class="checkmark" style="display: none;"></div>
-        <div class="nfc-message">Tap Phone to Pay</div>
+        <div class="nfc-message">Waiting for tap</div>
         <div class="nfc-amount" id="nfcAmount">$0.00</div>
         <div class="nfc-submessage">
             Hold your phone near the NFC reader<br>
@@ -653,10 +653,11 @@
             // Clear the timeout since payment was successful
             if (paymentTimeout) clearTimeout(paymentTimeout);
             
-            // Return to main screen after 5 seconds
+            // Return to main screen after 5 seconds and clear the amount
             setTimeout(() => {
                 nfcScreen.style.display = 'none';
                 resetUI();
+                clearAmount(); // Clear the input amount after successful payment
             }, 5000);
         }
 
@@ -780,7 +781,7 @@
         function newTransaction() {
             // Reset everything
             isProcessing = false;
-            clearAmount();
+            clearAmount(); // Clear the amount input
             resetUI();
         }
 
@@ -802,7 +803,7 @@
 
                 if (!response.ok) {
                     const errorData = await response.json();
-                    throw new Error(errorData.error || 'Failed to start payment');
+                    throw new Error(errorData.message || errorData.error || 'Failed to start payment');
                 }
 
                 const result = await response.json();
