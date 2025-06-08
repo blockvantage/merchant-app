@@ -89,7 +89,7 @@ cat > build/Dockerfile << 'DOCKERFILE'
 FROM ubuntu:22.04
 
 # Install required tools
-RUN apt-get update && apt-get install -y \
+RUN apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq \
     fdisk \
     util-linux \
     e2fsprogs \
@@ -103,7 +103,7 @@ RUN apt-get update && apt-get install -y \
     systemd-container \
     kpartx \
     parted \
-    rsync \
+    rsync >/dev/null 2>&1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -112,7 +112,7 @@ DOCKERFILE
 
 # Build the Docker image
 echo "Building Docker build environment..."
-docker build -t pi-image-builder build/ || error_exit "Failed to build Docker image"
+docker build -t pi-image-builder build/ >/dev/null 2>&1 || error_exit "Failed to build Docker image"
 success_msg "Docker build environment ready"
 
 # Step 5: Create the build script that runs inside Docker
@@ -204,7 +204,7 @@ if [ ! -b "${LOOP_DEV}p1" ] || [ ! -b "${LOOP_DEV}p2" ]; then
     echo "Loop device (no -P): $LOOP_DEV"
     
     # Install and use kpartx for partition mapping
-    apt-get update && apt-get install -y kpartx rsync
+    apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq kpartx rsync >/dev/null 2>&1
     echo "🗺️  Creating partition mappings with kpartx..."
     kpartx -av "$LOOP_DEV"
     sleep 3
@@ -643,7 +643,7 @@ export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
 
 # Try multiple times with different sources
 for i in {1..3}; do
-    if apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30; then
+    if apt-get update -qq -o Acquire::Retries=3 -o Acquire::http::Timeout=30 >/dev/null 2>&1; then
         echo "✅ Package cache updated successfully"
         break
     else
@@ -712,7 +712,7 @@ if ! command -v node >/dev/null 2>&1; then
     else
         echo "⚠️ NodeSource installation failed, trying default repository..."
         # Update package cache again
-        apt-get update -qq
+        apt-get update -qq >/dev/null 2>&1
         if apt-get install -y nodejs npm; then
             echo "✅ Node.js installed from default repository"
         else
@@ -979,11 +979,12 @@ if [ -f package.json ]; then
     npm config set audit false >/dev/null 2>&1
     npm config set fund false >/dev/null 2>&1
     npm config set update-notifier false >/dev/null 2>&1
+    npm config set loglevel silent >/dev/null 2>&1
     
     # Install with timeout to prevent hanging
-    timeout 600 npm ci --production --unsafe-perm --no-audit --no-fund --quiet || {
+    timeout 600 npm ci --production --unsafe-perm --no-audit --no-fund --silent >/dev/null 2>&1 || {
         echo "WARNING: npm ci failed or timed out, trying npm install instead..."
-        timeout 300 npm install --production --unsafe-perm --no-audit --no-fund --quiet || {
+        timeout 300 npm install --production --unsafe-perm --no-audit --no-fund --silent >/dev/null 2>&1 || {
             echo "ERROR: Both npm ci and npm install failed"
             exit 1
         }
@@ -1461,10 +1462,19 @@ echo "🔒 Using secure Docker-only build (macOS compatible)..."
 echo "🐳 Running Docker build with minimal required access..."
 
 # All image preparation will happen inside Docker with proper Linux tools
+# Check if loop-control device exists before mounting it
+LOOP_CONTROL_DEVICE=""
+if [ -e "/dev/loop-control" ]; then
+    LOOP_CONTROL_DEVICE="--device=/dev/loop-control"
+    echo "🔗 Using system loop-control device"
+else
+    echo "🔗 No loop-control device found, relying on privileged mode"
+fi
+
 docker run --rm --privileged \
     --cap-add=SYS_ADMIN \
     --cap-add=MKNOD \
-    --device=/dev/loop-control \
+    $LOOP_CONTROL_DEVICE \
     -v "$(pwd):/build" \
     pi-image-builder \
     /build/build/docker-build-script.sh

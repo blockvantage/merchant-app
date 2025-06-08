@@ -14,10 +14,10 @@ mkdir -p build/app-bundle
 # Install dependencies and build TypeScript (from root)
 echo "📦 Installing dependencies..."
 cd ../../
-npm ci --production=false
+npm ci --production=false --silent >/dev/null 2>&1
 
 echo "🔨 Building TypeScript..."
-npm run build
+npm run build --silent >/dev/null 2>&1
 
 # Return to deployment directory
 cd scripts/rpi-deploy
@@ -238,7 +238,7 @@ sudo chown -R freepay:freepay /opt/nfc-terminal
 # Install application dependencies
 echo "📦 Installing Node.js dependencies..."
 cd /opt/nfc-terminal
-sudo -u freepay npm ci --production
+sudo -u freepay npm ci --production --silent >/dev/null 2>&1
 
 # Install systemd services
 echo "⚙️  Installing systemd services..."
