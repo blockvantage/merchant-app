@@ -517,36 +517,7 @@ cp /build/build/app-bundle/config/*.service "$MOUNT_ROOT/etc/systemd/system/"
 echo "👤 Setting up freepay user home directory..."
 mkdir -p "$MOUNT_ROOT/home/freepay"
 
-# Install bashrc configuration
-cat /build/build/app-bundle/config/bashrc-append >> "$MOUNT_ROOT/home/freepay/.bashrc"
-
-# Install helper scripts
-echo "📜 Installing helper scripts..."
-cp /build/build/app-bundle/config/start-kiosk.sh "$MOUNT_ROOT/home/freepay/"
-cp /build/build/app-bundle/config/calibrate-touch.sh "$MOUNT_ROOT/home/freepay/"
-cp /build/build/app-bundle/config/connect-wifi.sh "$MOUNT_ROOT/home/freepay/"
-cp /build/build/app-bundle/config/debug-gui.sh "$MOUNT_ROOT/home/freepay/"
-chmod +x "$MOUNT_ROOT/home/freepay/start-kiosk.sh"
-chmod +x "$MOUNT_ROOT/home/freepay/calibrate-touch.sh"
-chmod +x "$MOUNT_ROOT/home/freepay/connect-wifi.sh"
-chmod +x "$MOUNT_ROOT/home/freepay/debug-gui.sh"
-
-# Verify critical files were copied
-echo "🔍 Verifying critical GUI files..."
-if [ ! -f "$MOUNT_ROOT/home/freepay/start-kiosk.sh" ]; then
-    echo "❌ ERROR: start-kiosk.sh was not copied properly"
-    exit 1
-fi
-echo "✅ start-kiosk.sh verified"
-
-# Install .xinitrc for X11 startup
-cp /build/build/app-bundle/config/xinitrc "$MOUNT_ROOT/home/freepay/.xinitrc"
-chmod +x "$MOUNT_ROOT/home/freepay/.xinitrc"
-
-# Set proper ownership for freepay home directory files (before chroot)
-echo "🔧 Setting file ownership for freepay user..."
-# Note: Inside chroot, UID 1000 will be freepay, so we set ownership to 1000:1000
-chown -R 1000:1000 "$MOUNT_ROOT/home/freepay" 2>/dev/null || echo "⚠️  Pre-chroot ownership setting failed (will be fixed in chroot)"
+# Note: GUI files will be installed AFTER user setup in chroot to prevent deletion
 
 # Install X11 configuration for 5" touchscreen
 echo "👆 Installing X11 touch configuration..."
@@ -1074,6 +1045,52 @@ fi
 # Verify user exists
 echo "Verifying freepay user..."
 id freepay || echo "ERROR: freepay user not found!"
+
+# Install GUI files AFTER user setup to prevent deletion
+echo "📜 Installing GUI files for freepay user..."
+echo "Copying start-kiosk.sh..."
+cp /build/build/app-bundle/config/start-kiosk.sh /home/freepay/
+echo "Copying helper scripts..."
+cp /build/build/app-bundle/config/calibrate-touch.sh /home/freepay/
+cp /build/build/app-bundle/config/connect-wifi.sh /home/freepay/
+cp /build/build/app-bundle/config/debug-gui.sh /home/freepay/
+echo "Copying .xinitrc..."
+cp /build/build/app-bundle/config/xinitrc /home/freepay/.xinitrc
+echo "Setting executable permissions..."
+chmod +x /home/freepay/start-kiosk.sh
+chmod +x /home/freepay/calibrate-touch.sh
+chmod +x /home/freepay/connect-wifi.sh
+chmod +x /home/freepay/debug-gui.sh
+chmod +x /home/freepay/.xinitrc
+echo "Setting ownership..."
+chown freepay:freepay /home/freepay/start-kiosk.sh
+chown freepay:freepay /home/freepay/calibrate-touch.sh
+chown freepay:freepay /home/freepay/connect-wifi.sh
+chown freepay:freepay /home/freepay/debug-gui.sh
+chown freepay:freepay /home/freepay/.xinitrc
+
+echo "Installing bashrc configuration..."
+cat /build/build/app-bundle/config/bashrc-append >> /home/freepay/.bashrc
+chown freepay:freepay /home/freepay/.bashrc
+
+echo "🔍 Verifying GUI files installation..."
+if [ -f /home/freepay/start-kiosk.sh ] && [ -x /home/freepay/start-kiosk.sh ]; then
+    echo "✅ start-kiosk.sh verified"
+else
+    echo "❌ ERROR: start-kiosk.sh missing or not executable"
+    ls -la /home/freepay/start-kiosk.sh 2>/dev/null || echo "File not found"
+    exit 1
+fi
+
+if [ -f /home/freepay/.xinitrc ] && [ -x /home/freepay/.xinitrc ]; then
+    echo "✅ .xinitrc verified"
+else
+    echo "❌ ERROR: .xinitrc missing or not executable"
+    ls -la /home/freepay/.xinitrc 2>/dev/null || echo "File not found"
+    exit 1
+fi
+
+echo "✅ All GUI files installed and verified successfully"
 
 # Remove any existing user configuration that might conflict
 echo "Cleaning up user configuration conflicts..."
