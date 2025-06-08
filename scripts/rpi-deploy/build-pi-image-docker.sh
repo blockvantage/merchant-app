@@ -81,6 +81,23 @@ fi
 echo "🏗️  Step 3: Building application for production..."
 ./build-app-production.sh
 
+# Verify GUI files were created
+echo "🔍 Verifying GUI files were created..."
+if [ ! -f "build/app-bundle/config/start-kiosk.sh" ]; then
+    echo "❌ ERROR: start-kiosk.sh not found after production build"
+    echo "Available files in build/app-bundle/config/:"
+    ls -la build/app-bundle/config/ 2>/dev/null || echo "Directory not found"
+    error_exit "GUI files missing - production build failed"
+fi
+
+if [ ! -f "build/app-bundle/config/xinitrc" ]; then
+    echo "❌ ERROR: xinitrc not found after production build"
+    error_exit "GUI files missing - production build failed"
+fi
+
+echo "✅ GUI files verified in build/app-bundle/config/"
+ls -la build/app-bundle/config/*.sh build/app-bundle/config/xinitrc 2>/dev/null || true
+
 # Step 4: Prepare Docker environment
 echo "🐳 Step 4: Setting up Docker build environment..."
 
@@ -445,7 +462,14 @@ fi
 
 # Install systemd services
 echo "⚙️  Installing systemd services..."
-cp /build/build/app-bundle/config/*.service "$MOUNT_ROOT/etc/systemd/system/"
+echo "Debug: Checking for service files..."
+if ls /build/build/app-bundle/config/*.service 1> /dev/null 2>&1; then
+    cp /build/build/app-bundle/config/*.service "$MOUNT_ROOT/etc/systemd/system/"
+    echo "✅ Service files copied"
+else
+    echo "⚠️ No service files found in /build/build/app-bundle/config/"
+    ls -la /build/build/app-bundle/config/ 2>/dev/null || echo "Directory not accessible"
+fi
 
 # Enable services manually (better than systemctl enable in chroot)
 echo "🔧 Enabling systemd services..."
@@ -509,9 +533,16 @@ ln -sf /dev/null "$MOUNT_ROOT/etc/systemd/system/sddm.service"
 # Disable getty on tty1 so our GUI service can take over
 ln -sf /dev/null "$MOUNT_ROOT/etc/systemd/system/getty@tty1.service"
 
-# Install systemd services from pre-built config files
+# Install systemd services from pre-built config files (moved to after GUI config copying)
 echo "⚙️  Installing systemd services..."
-cp /build/build/app-bundle/config/*.service "$MOUNT_ROOT/etc/systemd/system/"
+if [ -d "$MOUNT_ROOT/tmp/gui-config" ] && ls "$MOUNT_ROOT/tmp/gui-config"/*.service 1> /dev/null 2>&1; then
+    cp "$MOUNT_ROOT/tmp/gui-config"/*.service "$MOUNT_ROOT/etc/systemd/system/"
+    echo "✅ Using original service files"
+    echo "Installed services:"
+    ls -la "$MOUNT_ROOT/tmp/gui-config"/*.service 2>/dev/null | sed 's|.*/||'
+else
+    echo "⚠️ No original service files found, services will be created as needed"
+fi
 
 # Create freepay user home directory and install pre-built configuration
 echo "👤 Setting up freepay user home directory..."
@@ -519,10 +550,27 @@ mkdir -p "$MOUNT_ROOT/home/freepay"
 
 # Note: GUI files will be installed AFTER user setup in chroot to prevent deletion
 
-# Install X11 configuration for 5" touchscreen
+# Install X11 configuration for 5" touchscreen (moved to after GUI config copying)
 echo "👆 Installing X11 touch configuration..."
 mkdir -p "$MOUNT_ROOT/etc/X11/xorg.conf.d"
-cp /build/build/app-bundle/config/xorg.conf.d/99-calibration.conf "$MOUNT_ROOT/etc/X11/xorg.conf.d/"
+
+if [ -f "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d/99-calibration.conf" ]; then
+    cp "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d/99-calibration.conf" "$MOUNT_ROOT/etc/X11/xorg.conf.d/"
+    echo "✅ Using original X11 touch config"
+else
+    echo "⚠️ Original X11 touch config not found, creating minimal version..."
+    cat > "$MOUNT_ROOT/etc/X11/xorg.conf.d/99-calibration.conf" << 'TOUCH_CONFIG'
+Section "InputClass"
+    Identifier "calibration"
+    MatchProduct "ADS7846 Touchscreen"
+    Option "Calibration" "200 3900 200 3900"
+    Option "SwapAxes" "1"
+    Option "InvertX" "false"
+    Option "InvertY" "false"
+    Option "TransformationMatrix" "0 -1 1 1 0 0 0 0 1"
+EndSection
+TOUCH_CONFIG
+fi
 
 # Disable first-boot wizard and enable SSH
 echo "🔐 Disabling first-boot wizard and enabling SSH..."
@@ -546,10 +594,18 @@ chmod +x "$MOUNT_ROOT/usr/lib/raspberrypi-sys-mods/firstboot"
 # Create missing directories that would normally be provided by Pi packages
 mkdir -p "$MOUNT_ROOT/opt/vc/bin" "$MOUNT_ROOT/opt/vc/lib"
 
-# Install udev rules
+# Install udev rules (moved to after GUI config copying)
 echo "📡 Installing udev rules..."
 mkdir -p "$MOUNT_ROOT/etc/udev/rules.d"
-cp /build/build/app-bundle/config/udev/rules.d/10-wifi-unblock.rules "$MOUNT_ROOT/etc/udev/rules.d/"
+
+if [ -f "$MOUNT_ROOT/tmp/gui-config/udev/rules.d/10-wifi-unblock.rules" ]; then
+    cp "$MOUNT_ROOT/tmp/gui-config/udev/rules.d/10-wifi-unblock.rules" "$MOUNT_ROOT/etc/udev/rules.d/"
+    echo "✅ Using original udev rules"
+else
+    echo "⚠️ Original udev rules not found, creating minimal version..."
+    echo '# Automatically unblock WiFi on boot' > "$MOUNT_ROOT/etc/udev/rules.d/10-wifi-unblock.rules"
+    echo 'ACTION=="add", SUBSYSTEM=="rfkill", ATTR{type}=="wlan", ATTR{state}="0"' >> "$MOUNT_ROOT/etc/udev/rules.d/10-wifi-unblock.rules"
+fi
 
 # WiFi unblock service already installed above with other services
 
@@ -608,12 +664,178 @@ if [ "$SSH_ENABLE_PASSWORD_AUTH" = "true" ]; then
     sed -i 's/UsePAM no/UsePAM yes/' "$MOUNT_ROOT/etc/ssh/sshd_config"
 fi
 
+# Copy GUI config files BEFORE chroot (where Docker volume mounts work)
+echo "=========================================="
+echo "🔍 PRE-COPY PHASE: Finding original config files"
+echo "=========================================="
+echo "📋 Pre-copying GUI config files to image..."
+mkdir -p "$MOUNT_ROOT/tmp/gui-config"
+
+# Debug: Show what's actually in the Docker mount
+echo "🔍 Debugging Docker mount structure:"
+echo "Working directory: $(pwd)"
+echo "Mount point exists: $MOUNT_ROOT"
+echo "Contents of /build:"
+ls -la /build/ 2>/dev/null || echo "❌ /build not found"
+echo "Contents of /build/build:"
+ls -la /build/build/ 2>/dev/null || echo "❌ /build/build not found"
+echo "Looking for app-bundle:"
+find /build -name "app-bundle" -type d 2>/dev/null || echo "❌ app-bundle not found"
+echo "Looking for config directories:"
+find /build -name "config" -type d 2>/dev/null || echo "❌ config directories not found"
+echo "Looking for specific GUI files:"
+find /build -name "start-kiosk.sh" 2>/dev/null || echo "❌ start-kiosk.sh not found"
+echo "Looking for service files:"
+find /build -name "*.service" 2>/dev/null | head -5 || echo "❌ service files not found"
+
+# Try to find config directory in the Docker mounted filesystem
+GUI_SOURCE_DIR=""
+for possible_dir in "/build/build/app-bundle/config" "/build/scripts/rpi-deploy/build/app-bundle/config" "/build/app-bundle/config"; do
+    echo "Checking: $possible_dir"
+    if [ -d "$possible_dir" ]; then
+        GUI_SOURCE_DIR="$possible_dir"
+        echo "✅ Found source config directory at: $GUI_SOURCE_DIR"
+        echo "Contents:"
+        ls -la "$GUI_SOURCE_DIR/" 2>/dev/null
+        break
+    fi
+done
+
+# If not found in expected locations, search dynamically
+if [ -z "$GUI_SOURCE_DIR" ]; then
+    echo "Searching dynamically for config directory..."
+    FOUND_CONFIG=$(find /build -name "config" -type d -path "*/app-bundle/config" 2>/dev/null | head -1)
+    if [ -n "$FOUND_CONFIG" ]; then
+        GUI_SOURCE_DIR="$FOUND_CONFIG"
+        echo "✅ Found config directory via search: $GUI_SOURCE_DIR"
+        echo "Contents:"
+        ls -la "$GUI_SOURCE_DIR/" 2>/dev/null
+    fi
+fi
+
+if [ -n "$GUI_SOURCE_DIR" ] && [ -d "$GUI_SOURCE_DIR" ]; then
+    echo "📋 Copying GUI config files to image..."
+    
+    # Copy specific files we need
+    for file in start-kiosk.sh xinitrc calibrate-touch.sh connect-wifi.sh debug-gui.sh bashrc-append; do
+        if [ -f "$GUI_SOURCE_DIR/$file" ]; then
+            cp "$GUI_SOURCE_DIR/$file" "$MOUNT_ROOT/tmp/gui-config/"
+            echo "✅ Copied $file"
+        else
+            echo "⚠️ $file not found in source"
+        fi
+    done
+    
+    # Copy subdirectories if they exist
+    if [ -d "$GUI_SOURCE_DIR/xorg.conf.d" ]; then
+        mkdir -p "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d"
+        cp -r "$GUI_SOURCE_DIR/xorg.conf.d"/* "$MOUNT_ROOT/tmp/gui-config/xorg.conf.d/" 2>/dev/null || true
+        echo "✅ Copied xorg.conf.d"
+    fi
+    
+    if [ -d "$GUI_SOURCE_DIR/udev" ]; then
+        mkdir -p "$MOUNT_ROOT/tmp/gui-config/udev"
+        cp -r "$GUI_SOURCE_DIR/udev"/* "$MOUNT_ROOT/tmp/gui-config/udev/" 2>/dev/null || true
+        echo "✅ Copied udev rules"
+    fi
+    
+    # Copy service files
+    for service in "$GUI_SOURCE_DIR"/*.service; do
+        if [ -f "$service" ]; then
+            cp "$service" "$MOUNT_ROOT/tmp/gui-config/"
+            echo "✅ Copied $(basename "$service")"
+        fi
+    done
+    
+    echo "✅ GUI config files copied to image"
+    echo "Final contents of gui-config:"
+    ls -la "$MOUNT_ROOT/tmp/gui-config/" 2>/dev/null || echo "Directory listing failed"
+    
+    # Verify files were actually copied
+    echo "🔍 Verifying copied files:"
+    for file in start-kiosk.sh xinitrc; do
+        if [ -f "$MOUNT_ROOT/tmp/gui-config/$file" ]; then
+            echo "✅ $file copied successfully ($(wc -c < "$MOUNT_ROOT/tmp/gui-config/$file") bytes)"
+        else
+            echo "❌ $file missing after copy"
+        fi
+    done
+else
+    echo "❌ No source config directory found, GUI files will be created as fallbacks in chroot"
+    echo "🔍 This means either:"
+    echo "   1. Production build didn't create config files"
+    echo "   2. Docker volume mount isn't working" 
+    echo "   3. Files are in a different location"
+fi
+
+echo "=========================================="
+echo "🔍 PRE-COPY PHASE COMPLETE"
+echo "=========================================="
+
 # Install pre-built user setup scripts
 echo "👤 Installing user setup scripts..."
-cp /build/build/app-bundle/config/setup-ssh-user.sh "$MOUNT_ROOT/tmp/"
-cp /build/build/app-bundle/config/setup-freepay-user.sh "$MOUNT_ROOT/tmp/"
-chmod +x "$MOUNT_ROOT/tmp/setup-ssh-user.sh"
-chmod +x "$MOUNT_ROOT/tmp/setup-freepay-user.sh"
+
+# Try to find user setup scripts in multiple locations
+USER_SCRIPTS_DIR=""
+for possible_dir in "/build/build/app-bundle/config" "/build/scripts/rpi-deploy/build/app-bundle/config" "/build/app-bundle/config"; do
+    if [ -f "$possible_dir/setup-ssh-user.sh" ] && [ -f "$possible_dir/setup-freepay-user.sh" ]; then
+        USER_SCRIPTS_DIR="$possible_dir"
+        echo "✅ Found user setup scripts at: $USER_SCRIPTS_DIR"
+        break
+    fi
+done
+
+if [ -n "$USER_SCRIPTS_DIR" ]; then
+    cp "$USER_SCRIPTS_DIR/setup-ssh-user.sh" "$MOUNT_ROOT/tmp/"
+    cp "$USER_SCRIPTS_DIR/setup-freepay-user.sh" "$MOUNT_ROOT/tmp/"
+    chmod +x "$MOUNT_ROOT/tmp/setup-ssh-user.sh"
+    chmod +x "$MOUNT_ROOT/tmp/setup-freepay-user.sh"
+    echo "✅ User setup scripts copied"
+else
+    echo "⚠️ User setup scripts not found, will create minimal versions in chroot"
+    # Create minimal user setup scripts directly in tmp
+    cat > "$MOUNT_ROOT/tmp/setup-ssh-user.sh" << 'SSH_SETUP'
+#!/bin/bash
+echo "Setting up SSH user..."
+SSH_USERNAME=${SSH_USERNAME:-freepay}
+SSH_PASSWORD=${SSH_PASSWORD:-freepay}
+if ! id "$SSH_USERNAME" &>/dev/null; then
+    useradd -m -s /bin/bash "$SSH_USERNAME" && echo "User $SSH_USERNAME created"
+fi
+echo "$SSH_USERNAME:$SSH_PASSWORD" | chpasswd && echo "Password set for $SSH_USERNAME"
+usermod -aG sudo,plugdev,dialout "$SSH_USERNAME" && echo "Added $SSH_USERNAME to groups"
+SSH_SETUP
+
+    cat > "$MOUNT_ROOT/tmp/setup-freepay-user.sh" << 'FREEPAY_SETUP'
+#!/bin/bash
+echo "Setting up freepay user..."
+pkill -u freepay 2>/dev/null || true
+if id freepay &>/dev/null; then
+    userdel -r freepay 2>/dev/null || true
+fi
+if getent passwd 1000 &>/dev/null; then
+    existing_user=$(getent passwd 1000 | cut -d: -f1)
+    if [ "$existing_user" != "freepay" ]; then
+        pkill -u "$existing_user" 2>/dev/null || true
+        userdel -r "$existing_user" 2>/dev/null || true
+    fi
+fi
+useradd -m -s /bin/bash -u 1000 -U freepay && echo "freepay user created"
+echo "freepay:freepay" | chpasswd && echo "Password set"
+usermod -aG sudo,plugdev,dialout,video,audio,input,tty,users freepay && echo "Groups added"
+mkdir -p /home/freepay /run/user/1000
+chown -R freepay:freepay /home/freepay /run/user/1000
+chmod 755 /home/freepay
+chmod 700 /run/user/1000
+echo "freepay ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/freepay
+chmod 440 /etc/sudoers.d/freepay
+echo "freepay user setup completed"
+FREEPAY_SETUP
+
+    chmod +x "$MOUNT_ROOT/tmp/setup-ssh-user.sh"
+    chmod +x "$MOUNT_ROOT/tmp/setup-freepay-user.sh"
+    echo "✅ Minimal user setup scripts created"
+fi
 
 # Install packages and configure system using chroot
 echo "📦 Installing packages in chroot environment..."
@@ -654,14 +876,14 @@ done
 
 # Install SSH first (most critical for recovery)
 echo "Installing SSH server..."
-apt-get install -y openssh-server >/dev/null 2>&1 || echo "⚠️ SSH installation failed"
+apt-get install -y -qq openssh-server >/dev/null 2>&1 || echo "⚠️ SSH installation failed"
 
 # Install Node.js repository with timeout and retries
 echo "Installing Node.js repository..."
 NODEJS_REPO_SUCCESS=false
 for i in {1..2}; do
     echo "NodeSource repository attempt $i..."
-    if timeout 180 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -; then
+    if timeout 180 curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1; then
         echo "✅ Node.js repository added successfully"
         NODEJS_REPO_SUCCESS=true
         break
@@ -680,16 +902,16 @@ fi
 echo "Installing X11 and window manager..."
 # Install X11 packages individually for better error handling
 echo "Installing xinit..."
-apt-get install -y xinit || echo "⚠️ xinit failed"
+apt-get install -y -qq xinit >/dev/null 2>&1 || echo "⚠️ xinit failed"
 
 echo "Installing X11 server..."
-apt-get install -y xserver-xorg || echo "⚠️ xserver-xorg failed"
+apt-get install -y -qq xserver-xorg >/dev/null 2>&1 || echo "⚠️ xserver-xorg failed"
 
 echo "Installing openbox window manager..."
-apt-get install -y openbox || echo "⚠️ openbox failed"
+apt-get install -y -qq openbox >/dev/null 2>&1 || echo "⚠️ openbox failed"
 
 echo "Installing screen utilities..."
-apt-get install -y unclutter x11-xserver-utils || echo "⚠️ screen utilities failed"
+apt-get install -y -qq unclutter x11-xserver-utils >/dev/null 2>&1 || echo "⚠️ screen utilities failed"
 
 echo "Installing Chromium browser..."
 # Try multiple Chromium packages
@@ -707,13 +929,13 @@ fi
 echo "Installing Node.js (if not already installed)..."
 if ! command -v node >/dev/null 2>&1; then
     echo "Attempting to install Node.js from NodeSource repository..."
-    if apt-get install -y nodejs; then
+    if apt-get install -y -qq nodejs >/dev/null 2>&1; then
         echo "✅ Node.js installed from NodeSource"
     else
         echo "⚠️ NodeSource installation failed, trying default repository..."
         # Update package cache again
         apt-get update -qq >/dev/null 2>&1
-        if apt-get install -y nodejs npm; then
+        if apt-get install -y -qq nodejs npm >/dev/null 2>&1; then
             echo "✅ Node.js installed from default repository"
         else
             echo "❌ All Node.js installation methods failed"
@@ -732,18 +954,21 @@ CRITICAL_MISSING=false
 REQUIRED_PACKAGES=("xinit" "openbox")
 OPTIONAL_PACKAGES=("chromium-browser" "chromium" "firefox-esr")
 
-echo "Required packages to check: ${REQUIRED_PACKAGES[*]}"
+echo "Required packages to verify: ${REQUIRED_PACKAGES[*]}"
 
 # Check required packages
 for pkg in "${REQUIRED_PACKAGES[@]}"; do
-    echo "Checking for package: $pkg"
+    # Skip empty elements
+    if [ -z "$pkg" ] || [ "$pkg" = "" ]; then
+        echo "⚠️ Skipping empty package name in verification list"
+        continue
+    fi
+    
+    echo "Verifying package: $pkg"
     if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii.*$pkg"; then
         echo "✅ Required package $pkg verified"
     else
         echo "❌ CRITICAL: Required package $pkg is missing"
-        # Show what packages are actually installed that match
-        echo "📋 Similar packages found:"
-        dpkg -l | grep -i "$pkg" || echo "   None found"
         CRITICAL_MISSING=true
     fi
 done
@@ -751,7 +976,6 @@ done
 # Check for at least one browser
 BROWSER_FOUND=false
 for pkg in "${OPTIONAL_PACKAGES[@]}"; do
-    echo "Checking for browser: $pkg"
     if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
         echo "✅ Browser package $pkg found"
         BROWSER_FOUND=true
@@ -766,13 +990,13 @@ fi
 
 # Check for Node.js
 if command -v node >/dev/null 2>&1; then
-    echo "✅ Node.js verified: $(node --version)"
+    NODE_VERSION=$(node --version 2>/dev/null || echo "unknown")
+    echo "✅ Node.js verified: $NODE_VERSION"
 else
     echo "⚠️ WARNING: Node.js not found - NFC terminal may not work"
 fi
 
 # Check for SSH
-echo "Checking for SSH server..."
 if dpkg -l openssh-server 2>/dev/null | grep -q "^ii"; then
     echo "✅ SSH server verified"
 else
@@ -958,15 +1182,16 @@ if [ "$SKIP_ACS_DRIVER" != "true" ]; then
 fi
 
 echo "Installing Node.js dependencies..."
-echo "Checking if NFC terminal app is installed..."
 if [ -d "/opt/nfc-terminal" ]; then
     cd /opt/nfc-terminal
-    echo "Found NFC terminal directory: $(pwd)"
-    echo "Contents: $(ls -la)"
-    echo "Checking for server.js or main app file..."
-    ls -la server.js 2>/dev/null || ls -la app.js 2>/dev/null || ls -la index.js 2>/dev/null || echo "WARNING: No main app file found"
+    echo "✅ Found NFC terminal directory"
+    if [ -f "server.js" ] || [ -f "app.js" ] || [ -f "index.js" ]; then
+        echo "✅ Main app file found"
+    else
+        echo "⚠️ WARNING: No main app file found"
+    fi
 else
-    echo "ERROR: /opt/nfc-terminal directory not found!"
+    echo "❌ ERROR: /opt/nfc-terminal directory not found!"
     echo "Available directories in /opt:"
     ls -la /opt/ || echo "No /opt directory found"
     echo "Searching for package.json files:"
@@ -974,7 +1199,7 @@ else
     exit 1
 fi
 if [ -f package.json ]; then
-    echo "Found package.json, installing dependencies..."
+    echo "Installing Node.js dependencies..."
     # Set npm timeout and disable audit to speed up installation
     npm config set audit false >/dev/null 2>&1
     npm config set fund false >/dev/null 2>&1
@@ -983,15 +1208,15 @@ if [ -f package.json ]; then
     
     # Install with timeout to prevent hanging
     timeout 600 npm ci --production --unsafe-perm --no-audit --no-fund --silent >/dev/null 2>&1 || {
-        echo "WARNING: npm ci failed or timed out, trying npm install instead..."
+        echo "⚠️ npm ci failed or timed out, trying npm install instead..."
         timeout 300 npm install --production --unsafe-perm --no-audit --no-fund --silent >/dev/null 2>&1 || {
-            echo "ERROR: Both npm ci and npm install failed"
+            echo "❌ Both npm ci and npm install failed"
             exit 1
         }
     }
-    echo "Node.js dependencies installation completed"
+    echo "✅ Node.js dependencies installation completed"
 else
-    echo "ERROR: package.json not found in /opt/nfc-terminal"
+    echo "❌ ERROR: package.json not found in /opt/nfc-terminal"
     echo "Directory contents:"
     ls -la /opt/nfc-terminal/ || true
     exit 1
@@ -1048,30 +1273,157 @@ echo "Verifying freepay user..."
 id freepay || echo "ERROR: freepay user not found!"
 
 # Install GUI files AFTER user setup to prevent deletion
+echo "=========================================="
 echo "📜 Installing GUI files for freepay user..."
-echo "Copying start-kiosk.sh..."
-cp /build/build/app-bundle/config/start-kiosk.sh /home/freepay/
-echo "Copying helper scripts..."
-cp /build/build/app-bundle/config/calibrate-touch.sh /home/freepay/
-cp /build/build/app-bundle/config/connect-wifi.sh /home/freepay/
-cp /build/build/app-bundle/config/debug-gui.sh /home/freepay/
-echo "Copying .xinitrc..."
-cp /build/build/app-bundle/config/xinitrc /home/freepay/.xinitrc
+echo "=========================================="
+
+echo "🔍 Checking for pre-copied config files..."
+echo "Current working directory: $(pwd)"
+echo "Contents of /tmp:"
+ls -la /tmp/ 2>/dev/null || echo "Cannot list /tmp"
+echo "Directory /tmp/gui-config exists: $([ -d "/tmp/gui-config" ] && echo "YES" || echo "NO")"
+if [ -d "/tmp/gui-config" ]; then
+    echo "Contents of /tmp/gui-config:"
+    ls -la /tmp/gui-config/ 2>/dev/null || echo "Directory listing failed"
+    echo "File count: $(ls -1 /tmp/gui-config 2>/dev/null | wc -l)"
+else
+    echo "Looking for gui-config in other locations:"
+    find /tmp -name "*gui*" -type d 2>/dev/null || echo "No gui directories found in /tmp"
+    find / -name "gui-config" -type d 2>/dev/null | head -5 || echo "No gui-config directories found"
+fi
+
+# Check if we have pre-copied config files from outside chroot
+# Use direct file operations (most reliable in chroot environments)
+echo "🔍 Checking for essential GUI files in /tmp/gui-config..."
+
+# Test files directly and avoid problematic shell variables in chroot
+if test -f "/tmp/gui-config/start-kiosk.sh" && test -f "/tmp/gui-config/xinitrc"; then
+    echo "✅ Essential GUI files found in /tmp/gui-config"
+    echo "✅ Using pre-copied original config files from /tmp/gui-config"
+    
+    echo "Available files:"
+    ls -la "/tmp/gui-config/" 2>/dev/null || echo "Directory listing failed"
+    
+    echo "Key files verified:"
+    if test -f "/tmp/gui-config/start-kiosk.sh"; then
+        echo "   - start-kiosk.sh: ✅ VERIFIED"
+        stat "/tmp/gui-config/start-kiosk.sh" | grep Size || echo "   (size check failed)"
+    fi
+    if test -f "/tmp/gui-config/xinitrc"; then
+        echo "   - xinitrc: ✅ VERIFIED"  
+        stat "/tmp/gui-config/xinitrc" | grep Size || echo "   (size check failed)"
+    fi
+    
+    echo "✅ Will use original config files directly from /tmp/gui-config"
+    
+else
+    echo "❌ Essential config files missing, creating fallbacks..."
+    echo "🔍 Debug info (directory contents):"
+    ls -la /tmp/gui-config/ 2>/dev/null || echo "Directory not accessible"
+    echo "🔍 Direct file tests:"
+    test -f "/tmp/gui-config/start-kiosk.sh" && echo "   - start-kiosk.sh: EXISTS" || echo "   - start-kiosk.sh: MISSING"
+    test -f "/tmp/gui-config/xinitrc" && echo "   - xinitrc: EXISTS" || echo "   - xinitrc: MISSING"
+    
+    echo "⚠️ Will create fallback config files"
+fi
+
+# Create start-kiosk.sh
+echo "Creating start-kiosk.sh..."
+if test -f "/tmp/gui-config/start-kiosk.sh"; then
+    echo "✅ Using original start-kiosk.sh from /tmp/gui-config"
+    cp "/tmp/gui-config/start-kiosk.sh" /home/freepay/
+else
+    echo "⚠️ Creating fallback start-kiosk.sh directly..."
+    cat > /home/freepay/start-kiosk.sh << 'FALLBACK_KIOSK'
+#!/bin/bash
+echo "🖥️ Starting NFC Terminal Kiosk Mode (Fallback)..."
+export DISPLAY=:0
+xset -dpms; xset s off; xset s noblank
+xrandr --output HDMI-1 --rotate left 2>/dev/null || true
+xinput set-prop "ADS7846 Touchscreen" "Coordinate Transformation Matrix" 0 -1 1 1 0 0 0 0 1 2>/dev/null || true
+unclutter -idle 1 &
+timeout=60; while [ $timeout -gt 0 ] && ! curl -f http://localhost:3000 >/dev/null 2>&1; do sleep 2; timeout=$((timeout-2)); done
+exec chromium-browser --kiosk --no-sandbox --disable-infobars --no-first-run --start-fullscreen http://localhost:3000
+FALLBACK_KIOSK
+fi
+
+# Create helper scripts
+echo "Creating helper scripts..."
+HELPER_SCRIPTS=("calibrate-touch.sh" "connect-wifi.sh" "debug-gui.sh")
+for script in "${HELPER_SCRIPTS[@]}"; do
+    # Skip empty elements
+    if [ -z "$script" ] || [ "$script" = "" ]; then
+        echo "⚠️ Skipping empty script name"
+        continue
+    fi
+    
+    if test -f "/tmp/gui-config/$script"; then
+        echo "✅ Using original $script from /tmp/gui-config"
+        cp "/tmp/gui-config/$script" /home/freepay/
+    else
+        echo "⚠️ Creating minimal $script directly..."
+        cat > "/home/freepay/$script" << EOF
+#!/bin/bash
+echo "Minimal $script script"
+echo "This is a fallback version created during build"
+EOF
+    fi
+done
+
+# Create .xinitrc
+echo "Creating .xinitrc..."
+if test -f "/tmp/gui-config/xinitrc"; then
+    echo "✅ Using original xinitrc from /tmp/gui-config"
+    cp "/tmp/gui-config/xinitrc" /home/freepay/.xinitrc
+else
+    echo "⚠️ Creating fallback .xinitrc directly..."
+    cat > /home/freepay/.xinitrc << 'FALLBACK_XINITRC'
+#!/bin/bash
+export DISPLAY=:0
+xset -dpms; xset s off; xset s noblank
+xrandr --output HDMI-1 --rotate left 2>/dev/null || true
+unclutter -idle 1 &
+openbox-session &
+sleep 3
+exec /home/freepay/start-kiosk.sh
+FALLBACK_XINITRC
+fi
+
 echo "Setting executable permissions..."
 chmod +x /home/freepay/start-kiosk.sh
-chmod +x /home/freepay/calibrate-touch.sh
-chmod +x /home/freepay/connect-wifi.sh
-chmod +x /home/freepay/debug-gui.sh
+for script in "${HELPER_SCRIPTS[@]}"; do
+    # Skip empty elements
+    if [ -z "$script" ] || [ "$script" = "" ]; then
+        continue
+    fi
+    if [ -f "/home/freepay/$script" ]; then
+        chmod +x "/home/freepay/$script"
+    fi
+done
 chmod +x /home/freepay/.xinitrc
 echo "Setting ownership..."
 chown freepay:freepay /home/freepay/start-kiosk.sh
-chown freepay:freepay /home/freepay/calibrate-touch.sh
-chown freepay:freepay /home/freepay/connect-wifi.sh
-chown freepay:freepay /home/freepay/debug-gui.sh
+for script in "${HELPER_SCRIPTS[@]}"; do
+    # Skip empty elements
+    if [ -z "$script" ] || [ "$script" = "" ]; then
+        continue
+    fi
+    if [ -f "/home/freepay/$script" ]; then
+        chown freepay:freepay "/home/freepay/$script"
+    fi
+done
 chown freepay:freepay /home/freepay/.xinitrc
 
 echo "Installing bashrc configuration..."
-cat /build/build/app-bundle/config/bashrc-append >> /home/freepay/.bashrc
+if test -f "/tmp/gui-config/bashrc-append"; then
+    cat "/tmp/gui-config/bashrc-append" >> /home/freepay/.bashrc
+    echo "✅ Using original bashrc configuration"
+else
+    echo "⚠️ bashrc-append not found, adding minimal configuration..."
+    echo '' >> /home/freepay/.bashrc
+    echo '# freepay user configuration' >> /home/freepay/.bashrc
+    echo 'export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"' >> /home/freepay/.bashrc
+fi
 chown freepay:freepay /home/freepay/.bashrc
 
 echo "🔍 Verifying GUI files installation..."
@@ -1228,17 +1580,22 @@ fi
 echo "Enabling system services..."
 services_to_enable="pcscd wifi-unblock wifi-connect nfc-terminal display-setup start-gui boot-debug dhcpcd"
 for service in $services_to_enable; do
-    if [ -n "$service" ] && [ "$service" != "" ]; then
-        if systemctl enable "$service" >/dev/null 2>&1; then
-            echo "✅ Enabled $service"
+    # Skip empty elements
+    if [ -z "$service" ] || [ "$service" = "" ]; then
+        echo "⚠️ Skipping empty service name"
+        continue
+    fi
+    
+    echo "Processing service: $service"
+    if systemctl enable "$service" >/dev/null 2>&1; then
+        echo "✅ Enabled $service"
+    else
+        echo "❌ Failed to enable $service, trying manual linking..."
+        # Try manual linking as fallback
+        if [ -f "/etc/systemd/system/$service.service" ]; then
+            ln -sf "/etc/systemd/system/$service.service" "/etc/systemd/system/multi-user.target.wants/" 2>/dev/null && echo "✅ Manually linked $service" || echo "❌ Failed to manually link $service"
         else
-            echo "❌ Failed to enable $service, trying manual linking..."
-            # Try manual linking as fallback
-            if [ -f "/etc/systemd/system/$service.service" ]; then
-                ln -sf "/etc/systemd/system/$service.service" "/etc/systemd/system/multi-user.target.wants/" 2>/dev/null && echo "✅ Manually linked $service" || echo "❌ Failed to manually link $service"
-            else
-                echo "⚠️  Service file $service.service not found"
-            fi
+            echo "⚠️  Service file $service.service not found"
         fi
     fi
 done
@@ -1313,10 +1670,12 @@ umount "$MOUNT_ROOT/proc" 2>/dev/null || true
 
 echo "Package installation phase completed"
 
-# Clean up installation scripts
+# Clean up installation scripts and temporary files
 rm "$MOUNT_ROOT/tmp/install-packages.sh"
 rm "$MOUNT_ROOT/tmp/setup-ssh-user.sh"
 rm "$MOUNT_ROOT/tmp/setup-freepay-user.sh"
+rm -rf "$MOUNT_ROOT/tmp/gui-config" 2>/dev/null || true
+echo "✅ Temporary files cleaned up"
 
 echo "Preserving original filesystem table..."
 # Don't modify fstab - the original Raspberry Pi OS image already has correct PARTUUIDs
@@ -1425,17 +1784,33 @@ echo "✅ Image build completed successfully inside Docker!"
 BUILD_SCRIPT
 
 # Replace placeholders in the build script (macOS compatible)
+echo "🔧 Substituting configuration values into build script..."
+
+# Use safer variable substitution to avoid special character issues
 sed "s|BASE_IMAGE_NAME|$BASE_IMAGE_NAME|g" build/docker-build-script.sh > build/docker-build-script-temp.sh
 sed "s|OUTPUT_IMAGE_NAME|$OUTPUT_IMAGE|g" build/docker-build-script-temp.sh > build/docker-build-script.sh
-sed -i '' "s|ALCHEMY_KEY_VALUE|$ALCHEMY_API_KEY|g" build/docker-build-script.sh
-sed -i '' "s|MERCHANT_ADDRESS_VALUE|$MERCHANT_ETH_ADDRESS|g" build/docker-build-script.sh
-sed -i '' "s|BLOCKCHAIN_NETWORKS_VALUE|$BLOCKCHAIN_NETWORKS|g" build/docker-build-script.sh
-sed -i '' "s|WIFI_SSID_VALUE|$WIFI_SSID|g" build/docker-build-script.sh
-sed -i '' "s|WIFI_PASSWORD_VALUE|$WIFI_PASSWORD|g" build/docker-build-script.sh
-sed -i '' "s|SSH_USERNAME_VALUE|$SSH_USERNAME|g" build/docker-build-script.sh
-sed -i '' "s|SSH_PASSWORD_VALUE|$SSH_PASSWORD|g" build/docker-build-script.sh
+
+# Escape special characters in variables for sed
+ESCAPED_ALCHEMY_KEY=$(printf '%s\n' "$ALCHEMY_API_KEY" | sed 's/[[\.*^$()+?{|]/\\&/g')
+ESCAPED_MERCHANT_ADDRESS=$(printf '%s\n' "$MERCHANT_ETH_ADDRESS" | sed 's/[[\.*^$()+?{|]/\\&/g')
+ESCAPED_BLOCKCHAIN_NETWORKS=$(printf '%s\n' "$BLOCKCHAIN_NETWORKS" | sed 's/[[\.*^$()+?{|]/\\&/g')
+ESCAPED_WIFI_SSID=$(printf '%s\n' "$WIFI_SSID" | sed 's/[[\.*^$()+?{|]/\\&/g')
+ESCAPED_WIFI_PASSWORD=$(printf '%s\n' "$WIFI_PASSWORD" | sed 's/[[\.*^$()+?{|]/\\&/g')
+ESCAPED_SSH_USERNAME=$(printf '%s\n' "$SSH_USERNAME" | sed 's/[[\.*^$()+?{|]/\\&/g')
+ESCAPED_SSH_PASSWORD=$(printf '%s\n' "$SSH_PASSWORD" | sed 's/[[\.*^$()+?{|]/\\&/g')
+
+sed -i '' "s|ALCHEMY_KEY_VALUE|$ESCAPED_ALCHEMY_KEY|g" build/docker-build-script.sh
+sed -i '' "s|MERCHANT_ADDRESS_VALUE|$ESCAPED_MERCHANT_ADDRESS|g" build/docker-build-script.sh
+sed -i '' "s|BLOCKCHAIN_NETWORKS_VALUE|$ESCAPED_BLOCKCHAIN_NETWORKS|g" build/docker-build-script.sh
+sed -i '' "s|WIFI_SSID_VALUE|$ESCAPED_WIFI_SSID|g" build/docker-build-script.sh
+sed -i '' "s|WIFI_PASSWORD_VALUE|$ESCAPED_WIFI_PASSWORD|g" build/docker-build-script.sh
+sed -i '' "s|SSH_USERNAME_VALUE|$ESCAPED_SSH_USERNAME|g" build/docker-build-script.sh
+sed -i '' "s|SSH_PASSWORD_VALUE|$ESCAPED_SSH_PASSWORD|g" build/docker-build-script.sh
 sed -i '' "s|SSH_ENABLE_PASSWORD_AUTH_VALUE|$SSH_ENABLE_PASSWORD_AUTH|g" build/docker-build-script.sh
+
 rm build/docker-build-script-temp.sh
+
+echo "✅ Configuration values substituted successfully"
 
 chmod +x build/docker-build-script.sh
 
@@ -1471,13 +1846,70 @@ else
     echo "🔗 No loop-control device found, relying on privileged mode"
 fi
 
-docker run --rm --privileged \
+echo "🐳 Starting Docker container with build script..."
+echo "Loop control device: $LOOP_CONTROL_DEVICE"
+
+# Debug: Check if GUI files exist before Docker run
+echo "🔍 Pre-Docker check: Verifying GUI files exist on host..."
+if [ -f "build/app-bundle/config/start-kiosk.sh" ]; then
+    echo "✅ start-kiosk.sh exists on host"
+    echo "File size: $(wc -c < build/app-bundle/config/start-kiosk.sh) bytes"
+else
+    echo "❌ start-kiosk.sh missing on host!"
+    ls -la build/app-bundle/config/ || echo "Config directory missing"
+fi
+
+# Get absolute path and fix permissions for Docker volume mount on macOS
+ABSOLUTE_BUILD_PATH="$(pwd)"
+CURRENT_USER_ID=$(id -u)
+CURRENT_GROUP_ID=$(id -g)
+
+echo "🔧 Docker mount details:"
+echo "   Host path: $ABSOLUTE_BUILD_PATH"
+echo "   User ID: $CURRENT_USER_ID"
+echo "   Group ID: $CURRENT_GROUP_ID"
+
+# Fix permissions on build directory for Docker access
+echo "🔧 Ensuring Docker can access build files..."
+chmod -R 755 build/ 2>/dev/null || echo "⚠️ Could not fix build directory permissions"
+
+# Test basic Docker volume mount with comprehensive debugging
+echo "🧪 Testing Docker volume mount access..."
+echo "Host directory contents:"
+ls -la build/app-bundle/config/ 2>/dev/null || echo "❌ Config directory not accessible on host"
+
+echo "Testing Docker mount:"
+MOUNT_TEST_OUTPUT=$(docker run --rm -v "$ABSOLUTE_BUILD_PATH:/build:ro" ubuntu:22.04 sh -c "
+echo 'Container filesystem check:'
+ls -la /build/build/app-bundle/config/ 2>/dev/null || echo 'Config dir not accessible in container'
+echo 'Mount points:'
+mount | grep build || echo 'No build mounts'
+echo 'File permissions:'
+stat /build/build/app-bundle/config/start-kiosk.sh 2>/dev/null || echo 'start-kiosk.sh not found'
+" 2>&1)
+
+echo "Mount test results:"
+echo "$MOUNT_TEST_OUTPUT"
+
+# Run Docker build with optimized volume mount for macOS
+echo "🐳 Running Docker with optimized volume mount..."
+if ! docker run --rm --privileged \
     --cap-add=SYS_ADMIN \
     --cap-add=MKNOD \
+    --cap-add=DAC_OVERRIDE \
+    --cap-add=FOWNER \
+    --security-opt apparmor:unconfined \
     $LOOP_CONTROL_DEVICE \
-    -v "$(pwd):/build" \
+    -v "$ABSOLUTE_BUILD_PATH:/build:delegated" \
+    --workdir /build \
     pi-image-builder \
-    /build/build/docker-build-script.sh
+    /build/build/docker-build-script.sh; then
+    
+    echo "❌ Docker build with volume mount failed"
+    error_exit "Docker container build process failed"
+fi
+
+echo "✅ Docker build completed successfully"
 
 # Restore Docker config if we backed it up
 if [ ! -z "$DOCKER_CONFIG_BACKUP" ]; then
