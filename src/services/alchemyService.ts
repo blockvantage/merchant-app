@@ -1,7 +1,7 @@
 import { SUPPORTED_CHAINS, ChainConfig } from '../config/index.js';
 import { TokenWithPrice, AlchemyTokenBalance, AlchemyTokenMetadata, MultiChainPortfolio, ChainBalances } from '../types/index.js';
 import { PriceService } from './priceService.js';
-import { Alchemy, Network, TransactionReceipt, TransactionResponse, AlchemySubscription, AlchemyMinedTransactionsAddress } from 'alchemy-sdk';
+import { Alchemy, Network, TransactionReceipt, TransactionResponse, AlchemySubscription, AlchemyMinedTransactionsAddress, AssetTransfersCategory } from 'alchemy-sdk';
 import { config } from '../config/index.js';
 
 interface Transaction {
@@ -505,7 +505,7 @@ export class AlchemyService {
   }
 
   /**
-   * Monitor transactions to a specific address for both ETH and ERC-20 token transfers
+   * Monitor transactions to a specific address for both ETH and ERC-20 token transfers using Alchemy's Asset Transfer API
    */
   static async monitorTransactions(
     merchantAddress: string,
@@ -525,191 +525,126 @@ export class AlchemyService {
       throw new Error(`Alchemy instance not found for chain ID ${chainId}`);
     }
 
-    const subscriptionKey = `${merchantAddress}-${chainId}`;
-    console.log(`🔍 Starting transaction monitoring for address: ${merchantAddress}`);
-    console.log(`⛓️ Monitoring ${chainConfig.displayName} for incoming transactions`);
+    console.log(`🔍 Starting asset transfer monitoring for address: ${merchantAddress}`);
+    console.log(`⛓️ Monitoring ${chainConfig.displayName} for incoming transfers`);
 
+    let isMonitoring = true;
+    let lastCheckedBlock = 0;
+
+    // Get the latest block number to start monitoring from
     try {
-      // Monitor all transactions to the merchant address (for ETH transfers)
-      const ethSubscription = alchemy.ws.on(
-        {
-          method: AlchemySubscription.MINED_TRANSACTIONS,
-          addresses: [{ to: merchantAddress }]
-        },
-        async (transaction: any) => {
-          try {
-            const valueInWei = parseInt(transaction.value || '0x0', 16);
-            const valueInEth = valueInWei / 1e18;
-            const explorerUrl = this.getBlockExplorerUrl(chainId, transaction.hash);
+      const latestBlock = await alchemy.core.getBlockNumber();
+      lastCheckedBlock = latestBlock;
+      console.log(`📦 Starting monitoring from block ${latestBlock}`);
+    } catch (error) {
+      console.error(`Error getting latest block:`, error);
+    }
 
-            console.log(`📡 ETH transaction detected on ${chainConfig.displayName}:`, {
-              hash: transaction.hash,
-              from: transaction.from,
-              to: transaction.to,
-              value: `${valueInEth} ETH (${valueInWei} wei)`,
-              blockNumber: transaction.blockNumber
-            });
+    // Polling function to check for new transfers
+    const pollForTransfers = async () => {
+      if (!isMonitoring) return;
 
-            if (minimumValueWei > 0 && valueInWei < minimumValueWei) {
-              console.log(`⚠️ ETH transaction below minimum value: ${valueInEth} ETH < ${minimumValueWei / 1e18} ETH`);
-              return;
-            }
+      try {
+        const currentBlock = await alchemy.core.getBlockNumber();
+        
+        // Use a conservative approach - stay 2 blocks behind to avoid "past head" errors
+        const safeToBlock = Math.max(currentBlock - 2, lastCheckedBlock);
+        
+        if (safeToBlock > lastCheckedBlock) {
+          // Get asset transfers to the merchant address since the last checked block
+          const transfers = await alchemy.core.getAssetTransfers({
+            toAddress: merchantAddress,
+            fromBlock: `0x${lastCheckedBlock.toString(16)}`,
+            toBlock: `0x${safeToBlock.toString(16)}`,
+            category: [AssetTransfersCategory.ERC20, AssetTransfersCategory.EXTERNAL], // Monitor both ERC-20 tokens and ETH
+            withMetadata: true,
+            excludeZeroValue: true
+          });
 
-            if (valueInWei > 0) {
-              const receipt = await alchemy.core.getTransactionReceipt(transaction.hash);
-              if (receipt && receipt.status === 1) {
-                console.log(`✅ ETH payment confirmed on ${chainConfig.displayName}: ${valueInEth} ETH`);
-                
+          for (const transfer of transfers.transfers) {
+            try {
+              console.log(`📡 Transfer detected on ${chainConfig.displayName}:`, {
+                hash: transfer.hash,
+                from: transfer.from,
+                to: transfer.to,
+                value: transfer.value,
+                asset: transfer.asset,
+                category: transfer.category,
+                blockNum: transfer.blockNum
+              });
+
+              // Skip if no hash
+              if (!transfer.hash) {
+                continue;
+              }
+
+              // Determine token details
+              let tokenSymbol = transfer.asset || chainConfig.nativeToken.symbol;
+              let tokenAddress = transfer.rawContract?.address || '0x0000000000000000000000000000000000000000';
+              let decimals = typeof transfer.rawContract?.decimal === 'string' 
+                ? parseInt(transfer.rawContract.decimal) 
+                : (transfer.rawContract?.decimal || 18);
+              
+              // For ETH transfers, use chain's native token info
+              if (transfer.category === AssetTransfersCategory.EXTERNAL) {
+                tokenSymbol = chainConfig.nativeToken.symbol;
+                tokenAddress = '0x0000000000000000000000000000000000000000';
+                decimals = chainConfig.nativeToken.decimals;
+              }
+
+              // Parse the transfer value
+              const transferValue = parseFloat(transfer.value?.toString() || '0');
+              
+              if (transferValue > 0) {
+                console.log(`✅ ${tokenSymbol} transfer confirmed on ${chainConfig.displayName}: ${transferValue} ${tokenSymbol}`);
+
+                // Convert to wei/smallest unit for consistency with existing code
+                const valueInSmallestUnits = Math.floor(transferValue * Math.pow(10, decimals));
+
                 callback({
-                  hash: transaction.hash,
-                  value: valueInWei,
-                  from: transaction.from,
-                  to: transaction.to,
-                  tokenSymbol: chainConfig.nativeToken.symbol,
-                  tokenAddress: '0x0000000000000000000000000000000000000000',
-                  decimals: 18
+                  hash: transfer.hash,
+                  value: valueInSmallestUnits,
+                  from: transfer.from || '',
+                  to: transfer.to || merchantAddress,
+                  tokenSymbol: tokenSymbol,
+                  tokenAddress: tokenAddress,
+                  decimals: decimals
                 });
               }
+            } catch (transferError) {
+              console.error(`Error processing transfer:`, transferError);
             }
-          } catch (error) {
-            console.error(`Error processing ETH transaction on ${chainConfig.displayName}:`, error);
           }
+
+          lastCheckedBlock = safeToBlock;
         }
-      );
-
-      // Monitor ERC-20 token transfers by watching Transfer events to the merchant address
-      const tokenSubscription = alchemy.ws.on(
-        {
-          method: AlchemySubscription.MINED_TRANSACTIONS,
-          includeRemoved: false,
-          hashesOnly: false
-        },
-        async (transaction: any) => {
-          try {
-            // Get transaction receipt to check logs for Transfer events
-            const receipt = await alchemy.core.getTransactionReceipt(transaction.hash);
-            if (!receipt || receipt.status !== 1 || !receipt.logs) {
-              return;
-            }
-
-            // Look for ERC-20 Transfer events to the merchant address
-            // Transfer event signature: Transfer(address indexed from, address indexed to, uint256 value)
-            const transferEventSignature = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
-            
-            for (const log of receipt.logs) {
-              if (log.topics && log.topics[0] === transferEventSignature && log.topics.length >= 3) {
-                // Check if the 'to' address (topics[2]) matches our merchant address
-                const toAddress = '0x' + log.topics[2].slice(-40); // Last 40 hex chars (20 bytes)
-                
-                if (toAddress.toLowerCase() === merchantAddress.toLowerCase()) {
-                  const tokenAddress = log.address;
-                  const transferValue = parseInt(log.data || '0x0', 16);
-                  
-                  console.log(`📡 ERC-20 transfer detected on ${chainConfig.displayName}:`, {
-                    hash: transaction.hash,
-                    tokenAddress,
-                    from: '0x' + log.topics[1].slice(-40),
-                    to: toAddress,
-                    rawValue: transferValue,
-                    blockNumber: transaction.blockNumber
-                  });
-
-                  // Get token metadata to determine decimals and symbol
-                  try {
-                    const metadataResponse = await fetch(chainConfig.alchemyUrl, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        jsonrpc: '2.0',
-                        id: 1,
-                        method: 'alchemy_getTokenMetadata',
-                        params: [tokenAddress]
-                      })
-                    });
-
-                    let decimals = 18;
-                    let symbol = 'TOKEN';
-                    
-                    if (metadataResponse.ok) {
-                      const metadataData = await metadataResponse.json();
-                      decimals = metadataData.result?.decimals || 18;
-                      symbol = metadataData.result?.symbol || 'TOKEN';
-                    } else {
-                      // Use fallback values
-                      decimals = this.getFallbackDecimals(tokenAddress.toLowerCase(), chainId);
-                      symbol = this.getFallbackSymbol(tokenAddress.toLowerCase(), chainId);
-                    }
-
-                    const formattedValue = transferValue / Math.pow(10, decimals);
-                    console.log(`✅ ${symbol} transfer confirmed on ${chainConfig.displayName}: ${formattedValue} ${symbol}`);
-
-                    callback({
-                      hash: transaction.hash,
-                      value: transferValue, // Keep raw value for consistency
-                      from: '0x' + log.topics[1].slice(-40),
-                      to: toAddress,
-                      tokenSymbol: symbol,
-                      tokenAddress: tokenAddress,
-                      decimals: decimals
-                    });
-
-                  } catch (metadataError) {
-                    console.error(`Error fetching token metadata for ${tokenAddress}:`, metadataError);
-                    
-                    // Still report the transfer with fallback values
-                    const decimals = this.getFallbackDecimals(tokenAddress.toLowerCase(), chainId);
-                    const symbol = this.getFallbackSymbol(tokenAddress.toLowerCase(), chainId);
-                    const formattedValue = transferValue / Math.pow(10, decimals);
-                    
-                    console.log(`✅ ${symbol} transfer confirmed on ${chainConfig.displayName}: ${formattedValue} ${symbol} (fallback metadata)`);
-
-                    callback({
-                      hash: transaction.hash,
-                      value: transferValue,
-                      from: '0x' + log.topics[1].slice(-40),
-                      to: toAddress,
-                      tokenSymbol: symbol,
-                      tokenAddress: tokenAddress,
-                      decimals: decimals
-                    });
-                  }
-                }
-              }
-            }
-          } catch (error) {
-            console.error(`Error processing token transaction on ${chainConfig.displayName}:`, error);
-          }
+      } catch (error) {
+        // Handle specific "past head" errors more gracefully
+        if (error instanceof Error && error.message.includes('toBlock is past head')) {
+          // This is a timing issue - just wait for the next poll cycle
+          console.log(`⏳ Blockchain sync delay on ${chainConfig.displayName}, retrying next cycle...`);
+        } else {
+          console.error(`Error polling for transfers on ${chainConfig.displayName}:`, error);
         }
-      );
+      }
 
-      // Store both subscriptions for cleanup
-      this.activeSubscriptions.set(subscriptionKey, {
-        alchemy,
-        subscription: { eth: ethSubscription, token: tokenSubscription },
-        chainConfig
-      });
+      // Continue polling if still monitoring
+      if (isMonitoring) {
+        setTimeout(pollForTransfers, 3000); // Poll every 3 seconds
+      }
+    };
 
-      console.log(`✅ Transaction monitoring subscription established for ${chainConfig.displayName}`);
-      console.log('🎯 Ready to detect ETH and ERC-20 token payments...');
-      
-      // Return unsubscribe function
-      return () => {
-        console.log(`🔌 Unsubscribing from transaction monitoring on ${chainConfig.displayName}`);
-        const storedSubscription = this.activeSubscriptions.get(subscriptionKey);
-        if (storedSubscription) {
-          if (storedSubscription.subscription.eth) {
-            storedSubscription.subscription.eth.removeAllListeners();
-          }
-          if (storedSubscription.subscription.token) {
-            storedSubscription.subscription.token.removeAllListeners();
-          }
-          this.activeSubscriptions.delete(subscriptionKey);
-        }
-      };
-    } catch (error) {
-      console.error(`Error setting up transaction monitoring on ${chainConfig.displayName}:`, error);
-      throw error;
-    }
+    // Start polling
+    pollForTransfers();
+
+    console.log(`✅ Asset transfer monitoring started for ${chainConfig.displayName}`);
+    console.log('🎯 Ready to detect ETH and ERC-20 token transfers...');
+    
+    // Return unsubscribe function
+    return () => {
+      console.log(`🔌 Stopping asset transfer monitoring on ${chainConfig.displayName}`);
+      isMonitoring = false;
+    };
   }
 
   /**
