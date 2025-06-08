@@ -1343,7 +1343,7 @@ xrandr --output HDMI-1 --rotate left 2>/dev/null || true
 xinput set-prop "ADS7846 Touchscreen" "Coordinate Transformation Matrix" 0 -1 1 1 0 0 0 0 1 2>/dev/null || true
 unclutter -idle 1 &
 timeout=60; while [ $timeout -gt 0 ] && ! curl -f http://localhost:3000 >/dev/null 2>&1; do sleep 2; timeout=$((timeout-2)); done
-exec chromium-browser --kiosk --app=http://localhost:3000 --no-sandbox --disable-infobars --no-first-run --start-fullscreen --window-size=800,480 --window-position=0,0 --force-device-scale-factor=1 --disable-background-color --hide-scrollbars --overscroll-history-navigation=0 --disable-pinch
+exec chromium-browser --kiosk --app=http://localhost:3000 --no-sandbox --disable-infobars --no-first-run --start-fullscreen --window-size=480,800 --window-position=0,0 --force-device-scale-factor=1 --disable-background-color --hide-scrollbars --overscroll-history-navigation=0 --disable-pinch
 FALLBACK_KIOSK
 fi
 

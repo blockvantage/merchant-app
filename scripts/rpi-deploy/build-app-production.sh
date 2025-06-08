@@ -480,7 +480,7 @@ exec chromium-browser \
     --allow-running-insecure-content \
     --touch-events=enabled \
     --start-fullscreen \
-    --window-size=800,480 \
+    --window-size=480,800 \
     --window-position=0,0 \
     --force-device-scale-factor=1 \
     --overscroll-history-navigation=0 \
