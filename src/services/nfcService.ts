@@ -169,14 +169,37 @@ export class NFCService {
         console.error('💥 Error processing address balances/payment:', balanceError);
         console.log(`🧹 Cleaning up address ${ethAddress} due to error: ${balanceError.message}`);
         
+        if (balanceError.message === 'PHONE_MOVED_TOO_QUICKLY') {
+          // For phone moved too quickly, just broadcast the error but keep waiting for another tap
+          console.log('📱💨 Phone moved too quickly - broadcasting error but staying armed for retry');
+          broadcast({ 
+            type: 'payment_failure', 
+            message: 'Phone moved too quickly', 
+            errorType: 'PHONE_MOVED_TOO_QUICKLY' 
+          });
+          
+          // Don't resolve the promise - keep waiting for another tap
+          // Just clean up the current address processing
+          AddressProcessor.finishProcessingWithoutCooldown(ethAddress);
+          return; // Exit without resolving the promise
+        }
+        
         paymentSuccessful = false;
         
         if (this.cardHandlerResolve) {
-          // Check if this is an insufficient funds error and pass the specific message
-          const errorMessage = balanceError.message === "Customer doesn't have enough funds" 
-            ? balanceError.message 
-            : 'Error processing payment';
-          this.cardHandlerResolve({ success: false, message: errorMessage, errorType: 'PAYMENT_ERROR' });
+          // Check for specific error types and handle them appropriately
+          let errorMessage: string;
+          let errorType: string;
+          
+          if (balanceError.message === "Customer doesn't have enough funds") {
+            errorMessage = balanceError.message;
+            errorType = 'PAYMENT_ERROR';
+          } else {
+            errorMessage = 'Error processing payment';
+            errorType = 'PAYMENT_ERROR';
+          }
+          
+          this.cardHandlerResolve({ success: false, message: errorMessage, errorType: errorType });
           this.cardHandlerResolve = null;
         }
       } finally {
@@ -330,6 +353,42 @@ export class NFCService {
     this.walletScanArmed = false;
     this.walletScanPromise = null;
     this.walletScanResolve = null;
+  }
+
+  /**
+   * Cancel any ongoing operations (payment or wallet scan)
+   */
+  public cancelCurrentOperation(): void {
+    console.log('🚫 Cancelling current NFC operation...');
+    
+    // Cancel payment operation if active
+    if (this.paymentArmed && this.cardHandlerResolve) {
+      console.log('🚫 Cancelling ongoing payment operation');
+      this.cardHandlerResolve({ 
+        success: false, 
+        message: 'Payment cancelled by user', 
+        errorType: 'USER_CANCELLED' 
+      });
+      this.cardHandlerResolve = null;
+      this.disarmPayment();
+    }
+    
+    // Cancel wallet scan operation if active
+    if (this.walletScanArmed && this.walletScanResolve) {
+      console.log('🚫 Cancelling ongoing wallet scan operation');
+      this.walletScanResolve({ 
+        success: false, 
+        message: 'Wallet scan cancelled by user', 
+        errorType: 'USER_CANCELLED' 
+      });
+      this.walletScanResolve = null;
+      this.disarmWalletScan();
+    }
+    
+    // Clean up any stuck address processing states
+    AddressProcessor.clearAllProcessing();
+    
+    console.log('✅ NFC operation cancelled successfully');
   }
 
   /**

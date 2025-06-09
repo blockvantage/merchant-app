@@ -41,6 +41,12 @@ interface PaymentSession {
     merchantAddress: string;
     startTime: number;
     timeout: NodeJS.Timeout;
+    expectedToken?: {
+        symbol: string;
+        address: string;
+        amountExact: string; // Exact amount in smallest units as string
+        decimals: number;
+    };
 }
 
 // Store transaction history
@@ -98,22 +104,47 @@ export function broadcast(message: object) {
 type AsyncRequestHandler = (req: Request, res: Response, next?: NextFunction) => Promise<void | Response>;
 
 // Function to monitor transaction for a payment
-async function monitorTransaction(merchantAddress: string, amount: number, chainId: number = 1, chainName: string = "Ethereum") {
-    console.log(`🔍 Starting transaction monitoring for ${merchantAddress}, amount: $${amount}`);
-    console.log(`💰 Waiting for payment of $${amount} USD (${amount} wei minimum) on ${chainName} (Chain ID: ${chainId})`);
+async function monitorTransaction(
+    merchantAddress: string, 
+    usdAmount: number, 
+    chainId: number = 1, 
+    chainName: string = "Ethereum",
+    expectedPayment?: {
+        tokenSymbol: string;
+        tokenAddress: string;
+        requiredAmount: string; // Exact amount in smallest units
+        decimals: number;
+    }
+) {
+    console.log(`🔍 Starting transaction monitoring for ${merchantAddress}, amount: $${usdAmount}`);
+    
+    if (expectedPayment) {
+        const displayAmount = (BigInt(expectedPayment.requiredAmount) / BigInt(10 ** expectedPayment.decimals)).toString();
+        console.log(`💰 Expecting exactly $${usdAmount.toFixed(2)} USD (${displayAmount} ${expectedPayment.tokenSymbol}) on ${chainName}`);
+        console.log(`🔢 Exact amount (smallest units): ${expectedPayment.requiredAmount}`);
+        console.log(`🎯 Token address: ${expectedPayment.tokenAddress}`);
+    } else {
+        console.log(`💰 Waiting for payment of $${usdAmount} USD (any token) on ${chainName}`);
+    }
     
     const startTime = Date.now();
     const timeout = setTimeout(() => {
-        console.log(`⏰ Payment timeout for ${merchantAddress} - No payment of $${amount} received after 5 minutes on ${chainName}`);
+        console.log(`⏰ Payment timeout for ${merchantAddress} - No payment received after 5 minutes on ${chainName}`);
         broadcast({ type: 'payment_failure', message: 'Payment timeout - no transaction detected', errorType: 'PAYMENT_TIMEOUT' });
         activePayments.delete(merchantAddress);
     }, 300000); // 5 minutes timeout
 
     activePayments.set(merchantAddress, {
-        amount,
+        amount: usdAmount,
         merchantAddress,
         startTime,
-        timeout
+        timeout,
+        expectedToken: expectedPayment ? {
+            symbol: expectedPayment.tokenSymbol,
+            address: expectedPayment.tokenAddress.toLowerCase(),
+            amountExact: expectedPayment.requiredAmount,
+            decimals: expectedPayment.decimals
+        } : undefined
     });
 
     try {
@@ -139,19 +170,21 @@ async function monitorTransaction(merchantAddress: string, amount: number, chain
                 
                 // Handle both ETH and ERC-20 token transfers
                 const tokenSymbol = tx.tokenSymbol || 'ETH';
+                const tokenAddress = (tx.tokenAddress || '0x0000000000000000000000000000000000000000').toLowerCase();
                 const decimals = tx.decimals || 18;
-                const formattedAmount = tx.value / Math.pow(10, decimals);
+                const receivedAmountExact = tx.value.toString(); // Keep as string for precision
+                const formattedAmount = tx.value / Math.pow(10, decimals); // For display only
                 
                 console.log(`📝 ${tokenSymbol} transaction detected for ${merchantAddress} on ${chainName}:`, {
                     hash: tx.hash,
-                    value: tx.value,
+                    valueExact: receivedAmountExact,
                     formattedAmount: `${formattedAmount} ${tokenSymbol}`,
                     from: tx.from,
                     to: tx.to,
                     chainId,
                     chainName,
                     tokenSymbol,
-                    tokenAddress: tx.tokenAddress
+                    tokenAddress
                 });
                 console.log(`🔗 View transaction: ${explorerUrl}`);
                 
@@ -170,12 +203,65 @@ async function monitorTransaction(merchantAddress: string, amount: number, chain
                     timestamp: Date.now()
                 };
                 
-                // For payment verification, convert amount to USD
-                // Note: This is a simplified check - in production you'd want to verify the exact payment amount
-                const minimumPaymentValue = amount; // This is in USD
+                // Get the payment session to check expected values
+                const paymentSession = activePayments.get(merchantAddress);
+                let isValidPayment = false;
                 
-                if (formattedAmount > 0) {
-                    console.log(`✅ ${tokenSymbol} payment confirmed! Received ${formattedAmount} ${tokenSymbol} for ${merchantAddress} on ${chainName}`);
+                if (paymentSession?.expectedToken) {
+                    // Verify exact token and amount match using BigInt for precision
+                    const expected = paymentSession.expectedToken;
+                    const receivedTokenMatches = tokenAddress === expected.address && tokenSymbol === expected.symbol;
+                    
+                    // Compare exact amounts using BigInt - NO TOLERANCE
+                    const expectedAmountBigInt = BigInt(expected.amountExact);
+                    const receivedAmountBigInt = BigInt(receivedAmountExact);
+                    const amountMatches = expectedAmountBigInt === receivedAmountBigInt;
+                    
+                    // Convert to display amounts for logging
+                    const expectedTokenDisplay = (expectedAmountBigInt / BigInt(10 ** expected.decimals)).toString();
+                    const receivedDisplay = (receivedAmountBigInt / BigInt(10 ** decimals)).toString();
+                    
+                    console.log(`\n🔍 EXACT PAYMENT VERIFICATION (ZERO TOLERANCE):`);
+                    console.log(`   Expected payment: $${usdAmount.toFixed(2)} USD`);
+                    console.log(`   Expected token: ${expected.symbol} (${expected.address})`);
+                    console.log(`   Expected token amount: ${expected.amountExact} ${expected.symbol}`);
+                    console.log(`   Received token: ${tokenSymbol} (${tokenAddress})`);
+                    console.log(`   Received token amount: ${receivedAmountExact} ${tokenSymbol}`);
+                    console.log(`   Token matches: ${receivedTokenMatches ? '✅' : '❌'}`);
+                    console.log(`   Amount matches: ${amountMatches ? '✅' : '❌'}`);
+                    
+                    isValidPayment = receivedTokenMatches && amountMatches;
+                    
+                    if (!receivedTokenMatches) {
+                        console.log(`❌ REJECTION REASON: Wrong token`);
+                        console.log(`   Expected: ${expected.symbol} (${expected.address})`);
+                        console.log(`   Received: ${tokenSymbol} (${tokenAddress})`);
+                    }
+                    if (!amountMatches) {
+                        console.log(`❌ REJECTION REASON: Wrong amount - EXACT MATCH REQUIRED`);
+                        console.log(`   Expected: ${expected.amountExact} smallest units`);
+                        console.log(`   Received: ${receivedAmountExact} smallest units`);
+                        const difference = expectedAmountBigInt > receivedAmountBigInt 
+                            ? expectedAmountBigInt - receivedAmountBigInt 
+                            : receivedAmountBigInt - expectedAmountBigInt;
+                        console.log(`   Difference: ${difference.toString()} smallest units`);
+                    }
+                    
+                    if (isValidPayment) {
+                        console.log(`\n🎉 PAYMENT VERIFICATION: ✅ EXACT MATCH CONFIRMED!`);
+                        console.log(`   Customer paid exactly $${usdAmount.toFixed(2)} USD as requested`);
+                        console.log(`   Received exactly ${receivedAmountExact} smallest units of ${tokenSymbol}`);
+                    } else {
+                        console.log(`\n❌ PAYMENT VERIFICATION: FAILED - Transaction rejected (exact match required)`);
+                    }
+                } else {
+                    // Fallback: accept any positive amount (for backward compatibility)
+                    isValidPayment = formattedAmount > 0;
+                    console.log(`⚠️ No expected payment details - accepting any positive amount: ${formattedAmount} ${tokenSymbol}`);
+                }
+                
+                if (isValidPayment) {
+                    console.log(`✅ Payment APPROVED! Received exactly what was requested`);
                     console.log(`🔗 View on block explorer: ${explorerUrl}`);
                     
                     transactionRecord.status = 'confirmed';
@@ -198,7 +284,7 @@ async function monitorTransaction(merchantAddress: string, amount: number, chain
                         transaction: transactionRecord
                     });
                 } else {
-                    console.log(`⚠️ ${tokenSymbol} transaction detected but amount is 0: ${formattedAmount} ${tokenSymbol}`);
+                    console.log(`❌ Payment REJECTED! Transaction does not match expected payment details`);
                     
                     transactionRecord.status = 'failed';
                     transactionHistory.unshift(transactionRecord);
@@ -215,7 +301,7 @@ async function monitorTransaction(merchantAddress: string, amount: number, chain
                 }
             }, 
             chainId,
-            amount // Pass minimum amount (simplified - would need token-specific conversion in production)
+            0 // Don't filter by minimum amount in Alchemy service - we'll validate exactly here
         );
 
         console.log(`🎯 Transaction monitoring active for ${chainName} (Chain ID: ${chainId})`);
@@ -266,9 +352,15 @@ const initiatePaymentHandler: AsyncRequestHandler = async (req, res) => {
                     merchantAddress, 
                     amount, 
                     paymentResult.paymentInfo.chainId, 
-                    paymentResult.paymentInfo.chainName
+                    paymentResult.paymentInfo.chainName,
+                    {
+                        tokenSymbol: paymentResult.paymentInfo.selectedToken.symbol,
+                        tokenAddress: paymentResult.paymentInfo.selectedToken.address,
+                        requiredAmount: paymentResult.paymentInfo.requiredAmount,
+                        decimals: paymentResult.paymentInfo.selectedToken.decimals
+                    }
                 );
-                console.log(`🔍 Monitoring started for ${paymentResult.paymentInfo.chainName} payment of $${amount.toFixed(2)}`);
+                console.log(`🔍 Monitoring started for ${paymentResult.paymentInfo.chainName} payment of exactly ${paymentResult.paymentInfo.requiredAmount} smallest units of ${paymentResult.paymentInfo.selectedToken.symbol}`);
                 broadcast({ 
                     type: 'monitoring_started', 
                     message: `Monitoring ${paymentResult.paymentInfo.chainName} for payment...`,
@@ -278,7 +370,7 @@ const initiatePaymentHandler: AsyncRequestHandler = async (req, res) => {
             } catch (monitoringError) {
                 console.error(`❌ Failed to start monitoring on ${paymentResult.paymentInfo.chainName}:`, monitoringError);
                 
-                // Fallback: try to monitor on Ethereum mainnet
+                // Fallback: try to monitor on Ethereum mainnet (without specific token requirements)
                 console.log(`🔄 Falling back to Ethereum mainnet monitoring...`);
                 try {
                     await monitorTransaction(merchantAddress, amount, 1, "Ethereum (fallback)");
@@ -380,6 +472,37 @@ const scanWalletHandler: AsyncRequestHandler = async (req, res) => {
 };
 
 expressApp.post('/scan-wallet', scanWalletHandler);
+
+// Endpoint to cancel ongoing payment operations
+const cancelPaymentHandler: AsyncRequestHandler = async (req, res) => {
+    try {
+        console.log('🚫 Payment cancellation requested by user');
+        
+        // Cancel any ongoing NFC operations
+        nfcApp.cancelCurrentOperation();
+        
+        // Clear all active payment monitoring sessions
+        activePayments.forEach((session, merchantAddress) => {
+            console.log(`⏰ Clearing payment timeout for ${merchantAddress}`);
+            clearTimeout(session.timeout);
+        });
+        activePayments.clear();
+        
+        broadcast({ 
+            type: 'payment_cancelled', 
+            message: 'Payment cancelled by user' 
+        });
+        
+        res.json({ success: true, message: 'Payment cancelled successfully' });
+        
+    } catch (error: any) {
+        console.error('Error cancelling payment:', error);
+        const errorMessage = error.message || 'Failed to cancel payment';
+        res.status(500).json({ success: false, message: errorMessage });
+    }
+};
+
+expressApp.post('/cancel-payment', cancelPaymentHandler);
 
 // Debug endpoint to check supported chains and active subscriptions
 expressApp.get('/debug/chains', (req, res) => {

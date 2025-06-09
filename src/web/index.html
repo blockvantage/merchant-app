@@ -463,6 +463,38 @@
             .nfc-amount { font-size: 2.5rem; }
             .history-header h2 { font-size: 1.4rem; }
             .scan-wallet-button, .show-all-button { font-size: 0.9rem; padding: 12px 15px; }
+            .cancel-button { font-size: 3rem; min-height: 60px; }
+        }
+
+        .cancel-button {
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 15px;
+            padding: 20px 40px;
+            font-size: 4rem;
+            font-weight: 700;
+            cursor: pointer;
+            margin-top: 30px;
+            min-height: 80px;
+            width: 100%;
+            max-width: 400px;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 8px rgba(220, 53, 69, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .cancel-button:hover {
+            background: #c82333;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(220, 53, 69, 0.4);
+        }
+
+        .cancel-button:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 4px rgba(220, 53, 69, 0.3);
         }
     </style>
 </head>
@@ -499,11 +531,11 @@
         <div class="spinner"></div>
         <div class="checkmark" style="display: none;"></div>
         <div class="nfc-message">Waiting for tap</div>
-        <div class="nfc-amount" id="nfcAmount">$0.00</div>
         <div class="nfc-submessage">
             Hold your phone near the NFC reader<br>
-            <span class="loading-dots">Processing</span>
         </div>
+        <div class="nfc-amount" id="nfcAmount">$0.00</div>
+        <button class="cancel-button" onclick="cancelTransaction()">Cancel</button>
     </div>
 
     <div class="nfc-screen error" id="errorScreen" style="display: none;">
@@ -569,7 +601,18 @@
                         showWaitingPayment(data.amount);
                         break;
                     case 'payment_failure':
-                        showError(data.message);
+                        // Check if this is a "phone moved too quickly" error
+                        if (data.errorType === 'PHONE_MOVED_TOO_QUICKLY') {
+                            showPhoneMovedTooQuickly();
+                        } else {
+                            showError(data.message);
+                        }
+                        break;
+                    case 'payment_cancelled':
+                        console.log('Payment cancelled:', data.message);
+                        // Hide NFC screen and return to main
+                        document.getElementById('nfcScreen').style.display = 'none';
+                        resetUI();
                         break;
                     case 'transaction_confirmed':
                         showPaymentApproved();
@@ -615,6 +658,7 @@
             const nfcAmount = document.getElementById('nfcAmount');
             const spinner = nfcScreen.querySelector('.spinner');
             const checkmark = nfcScreen.querySelector('.checkmark');
+            const cancelButton = nfcScreen.querySelector('.cancel-button');
             
             nfcScreen.style.display = 'flex';
             nfcScreen.classList.add('waiting-payment');
@@ -623,6 +667,7 @@
             
             spinner.style.display = 'block';
             checkmark.style.display = 'none';
+            cancelButton.style.display = 'block'; // Show cancel button during waiting
             
             // Set timeout for payment monitoring
             if (paymentTimeout) clearTimeout(paymentTimeout);
@@ -638,6 +683,7 @@
             const nfcSubmessage = nfcScreen.querySelector('.nfc-submessage');
             const spinner = nfcScreen.querySelector('.spinner');
             const checkmark = nfcScreen.querySelector('.checkmark');
+            const cancelButton = nfcScreen.querySelector('.cancel-button');
             
             nfcScreen.classList.remove('waiting-payment', 'error');
             nfcScreen.classList.add('payment-approved');
@@ -646,6 +692,7 @@
             nfcMessage.textContent = 'Approved';
             nfcAmount.style.display = 'none';
             nfcSubmessage.style.display = 'none';
+            cancelButton.style.display = 'none'; // Hide cancel button on success
             
             spinner.style.display = 'none';
             checkmark.style.display = 'block';
@@ -666,6 +713,7 @@
             const nfcMessage = nfcScreen.querySelector('.nfc-message');
             const spinner = nfcScreen.querySelector('.spinner');
             const checkmark = nfcScreen.querySelector('.checkmark');
+            const cancelButton = nfcScreen.querySelector('.cancel-button');
             
             nfcScreen.style.display = 'flex';
             nfcScreen.classList.add('error');
@@ -674,6 +722,7 @@
             
             spinner.style.display = 'none';
             checkmark.style.display = 'none';
+            cancelButton.style.display = 'none'; // Hide cancel button on error
             
             // Clear the timeout
             if (paymentTimeout) clearTimeout(paymentTimeout);
@@ -691,6 +740,7 @@
             const nfcSubmessage = nfcScreen.querySelector('.nfc-submessage');
             const spinner = nfcScreen.querySelector('.spinner');
             const checkmark = nfcScreen.querySelector('.checkmark');
+            const cancelButton = nfcScreen.querySelector('.cancel-button');
             
             nfcScreen.style.display = 'none';
             nfcScreen.classList.remove('error', 'waiting-payment', 'payment-approved');
@@ -699,6 +749,7 @@
             nfcSubmessage.style.display = 'block'; // Show submessage for next transaction
             spinner.style.display = 'block';
             checkmark.style.display = 'none';
+            cancelButton.style.display = 'block'; // Show cancel button for next transaction
             
             // Reset processing state
             isProcessing = false;
@@ -945,6 +996,70 @@
         document.addEventListener('gesturestart', function(e) {
             e.preventDefault();
         });
+
+        function cancelTransaction() {
+            console.log('User cancelled transaction');
+            
+            // Clear any timeouts
+            if (paymentTimeout) {
+                clearTimeout(paymentTimeout);
+                paymentTimeout = null;
+            }
+            
+            // Reset processing state
+            isProcessing = false;
+            
+            // Hide NFC screen and return to main screen
+            document.getElementById('nfcScreen').style.display = 'none';
+            resetUI();
+            
+            // Notify server to cancel any ongoing NFC operations
+            fetch('/cancel-payment', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            }).catch(error => {
+                console.error('Error cancelling payment:', error);
+            });
+        }
+
+        function showPhoneMovedTooQuickly() {
+            const nfcScreen = document.getElementById('nfcScreen');
+            const nfcMessage = nfcScreen.querySelector('.nfc-message');
+            const nfcSubmessage = nfcScreen.querySelector('.nfc-submessage');
+            const spinner = nfcScreen.querySelector('.spinner');
+            const checkmark = nfcScreen.querySelector('.checkmark');
+            const cancelButton = nfcScreen.querySelector('.cancel-button');
+            const nfcAmount = nfcScreen.querySelector('.nfc-amount');
+            
+            // Show error state temporarily
+            nfcScreen.style.display = 'flex';
+            nfcScreen.classList.add('error');
+            nfcScreen.classList.remove('waiting-payment', 'payment-approved');
+            
+            nfcMessage.textContent = 'Phone Moved Too Quickly';
+            nfcSubmessage.innerHTML = 'Please keep phone steady<br>Returning to waiting...';
+            nfcAmount.style.display = 'none';
+            spinner.style.display = 'none';
+            checkmark.style.display = 'none';
+            cancelButton.style.display = 'none';
+            
+            // Return to waiting state after 2 seconds
+            setTimeout(() => {
+                // Reset to waiting state
+                nfcScreen.classList.remove('error');
+                nfcScreen.classList.add('waiting-payment');
+                
+                nfcMessage.textContent = 'Waiting for tap';
+                nfcSubmessage.innerHTML = 'Hold your phone near the NFC reader<br><span class="loading-dots">Processing</span>';
+                nfcAmount.style.display = 'block';
+                spinner.style.display = 'block';
+                cancelButton.style.display = 'block';
+                
+                console.log('Returned to waiting state after phone moved too quickly');
+            }, 2000);
+        }
     </script>
 </body>
 </html> 

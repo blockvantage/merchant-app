@@ -119,8 +119,21 @@ export class PaymentService {
       } else {
         console.log(`❌ Payment request failed with status: ${sw.toString(16)}`);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error sending payment request:', error);
+      
+      // Check for specific NFC transmission errors that indicate phone moved too quickly
+      if (error.code === 'failure' && 
+          (error.message?.includes('An error occurred while transmitting') ||
+           error.message?.includes('TransmitError') ||
+           error.previous?.message?.includes('SCardTransmit error') ||
+           error.previous?.message?.includes('Transaction failed'))) {
+        console.log('📱💨 Phone moved too quickly during payment request transmission');
+        throw new Error('PHONE_MOVED_TOO_QUICKLY');
+      }
+      
+      // Re-throw other errors as-is
+      throw error;
     }
   }
 
@@ -129,7 +142,7 @@ export class PaymentService {
    */
   static async calculateAndSendPayment(tokensWithPrices: TokenWithPrice[], reader: Reader, targetUSD: number): Promise<{
     selectedToken: TokenWithPrice;
-    requiredAmount: number;
+    requiredAmount: string; // Exact amount in smallest units as string
     chainId: number;
     chainName: string;
   }> {
@@ -196,8 +209,8 @@ export class PaymentService {
       if (tokens.length > 0) {
         console.log(`\n🏆 ${categoryName}:`);
         tokens.forEach(token => {
-          const requiredAmount = targetUSD / token.priceUSD;
-          console.log(`  ${optionIndex}. ${requiredAmount.toFixed(6)} ${token.symbol} (${token.chainDisplayName})`);
+          const requiredAmountFloat = targetUSD / token.priceUSD;
+          console.log(`  ${optionIndex}. ${requiredAmountFloat.toFixed(6)} ${token.symbol} (${token.chainDisplayName})`);
           optionIndex++;
         });
       }
@@ -205,22 +218,35 @@ export class PaymentService {
 
     // Smart payment selection: prefer L2 stablecoins, then follow priority order
     const selectedToken = this.selectBestPaymentToken(viableTokens);
-    const requiredAmount = targetUSD / selectedToken.priceUSD;
+    
+    // Calculate exact amount in smallest units for precise comparison
+    // This is the ONLY amount calculation - everything else derives from this
+    const targetUSDCents = Math.round(targetUSD * 1e8); // Convert to 8 decimal precision
+    const priceUSDCents = Math.round(selectedToken.priceUSD * 1e8);
+    const requiredAmountExact = (BigInt(targetUSDCents) * BigInt(10 ** selectedToken.decimals) / BigInt(priceUSDCents)).toString();
+    
+    // Convert exact amount back to token units for display and payment request
+    const requiredAmountForDisplay = (BigInt(requiredAmountExact) / BigInt(10 ** selectedToken.decimals)).toString();
     
     console.log(`\n🎯 SELECTED PAYMENT:`);
     console.log(`💳 Token: ${selectedToken.symbol}`);
-    console.log(`💰 Amount: ${requiredAmount.toFixed(6)} ${selectedToken.symbol}`);
+    console.log(`💰 Amount: ${requiredAmountForDisplay} ${selectedToken.symbol}`);
+    console.log(`🔢 Exact amount: ${requiredAmountExact}`);
     console.log(`⛓️  Chain: ${selectedToken.chainDisplayName} (Chain ID: ${selectedToken.chainId})`);
     console.log(`💵 Value: $${selectedToken.priceUSD.toFixed(4)} per ${selectedToken.symbol}`);
     console.log(`🔍 Payment will be monitored on: ${selectedToken.chainDisplayName}`);
     
-    // Send payment request with proper decimals and chain ID using NDEF formatting
-    await this.sendPaymentRequest(reader, requiredAmount.toFixed(6), selectedToken.address, selectedToken.decimals, selectedToken.chainId);
+    // Send payment request using the exact amount converted back to token units
+    // This ensures the payment request and monitoring use EXACTLY the same amount
+    await this.sendPaymentRequest(reader, requiredAmountForDisplay, selectedToken.address, selectedToken.decimals, selectedToken.chainId);
     
-    // Return information needed for monitoring
+    console.log(`✅ Payment request sent for exactly ${requiredAmountExact} ${selectedToken.symbol}`);
+    console.log(`📱 Customer will be asked to pay ${requiredAmountForDisplay} ${selectedToken.symbol}`);
+    
+    // Return information needed for monitoring - use the exact amount for both
     return {
       selectedToken,
-      requiredAmount,
+      requiredAmount: requiredAmountExact, // This is the exact amount in smallest units
       chainId: selectedToken.chainId,
       chainName: selectedToken.chainDisplayName
     };

@@ -50,6 +50,18 @@ export class App {
   }
 
   /**
+   * Cancel any ongoing NFC operations (payment or wallet scan).
+   */
+  cancelCurrentOperation(): void {
+    if (!this.nfcService) {
+        console.error('NFC Service not initialized in App!');
+        return;
+    }
+    console.log('App: Cancelling current NFC operation');
+    this.nfcService.cancelCurrentOperation();
+  }
+
+  /**
    * Stop core services gracefully.
    */
   stopServices(): void {
