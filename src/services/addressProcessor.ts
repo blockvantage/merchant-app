@@ -1,14 +1,11 @@
-import { COOLDOWN_DURATION } from '../config/index.js';
-
 /**
- * Service for managing address processing state and cooldowns
+ * Service for managing address processing state
  */
 export class AddressProcessor {
   private static processingAddresses = new Set<string>();
-  private static addressCooldowns = new Map<string, number>();
 
   /**
-   * Check if an address can be processed (not already processing and not in cooldown)
+   * Check if an address can be processed (not already being processed)
    */
   static canProcessAddress(address: string): boolean {
     const normalizedAddress = address.toLowerCase();
@@ -17,14 +14,6 @@ export class AddressProcessor {
     if (this.processingAddresses.has(normalizedAddress)) {
       console.log(`⏳ Address ${address} is already being processed, please wait...`);
       console.log(`🔍 Currently processing addresses:`, Array.from(this.processingAddresses));
-      return false;
-    }
-    
-    // Check cooldown
-    const lastProcessed = this.addressCooldowns.get(normalizedAddress);
-    if (lastProcessed && Date.now() - lastProcessed < COOLDOWN_DURATION) {
-      const remainingCooldown = Math.ceil((COOLDOWN_DURATION - (Date.now() - lastProcessed)) / 1000);
-      console.log(`🕐 Address ${address} is in cooldown, please wait ${remainingCooldown} seconds before trying again`);
       return false;
     }
     
@@ -42,13 +31,6 @@ export class AddressProcessor {
       return 'Address is already being processed';
     }
     
-    // Check cooldown
-    const lastProcessed = this.addressCooldowns.get(normalizedAddress);
-    if (lastProcessed && Date.now() - lastProcessed < COOLDOWN_DURATION) {
-      const remainingCooldown = Math.ceil((COOLDOWN_DURATION - (Date.now() - lastProcessed)) / 1000);
-      return `Please wait ${remainingCooldown} seconds before trying again`;
-    }
-    
     return null; // Can be processed
   }
 
@@ -63,28 +45,15 @@ export class AddressProcessor {
   }
 
   /**
-   * Mark address processing as complete and set cooldown (for successful payments)
+   * Mark address processing as complete
    */
   static finishProcessing(address: string): void {
     const normalizedAddress = address.toLowerCase();
     const wasProcessing = this.processingAddresses.has(normalizedAddress);
     this.processingAddresses.delete(normalizedAddress);
-    this.addressCooldowns.set(normalizedAddress, Date.now());
     console.log(`✅ Finished processing address: ${address} (was processing: ${wasProcessing})`);
     console.log(`📊 Remaining addresses being processed: ${this.processingAddresses.size}`);
-    console.log(`📱 Ready for next tap (this address has a ${COOLDOWN_DURATION/1000}s cooldown)\n`);
-  }
-
-  /**
-   * Mark address processing as complete WITHOUT setting cooldown (for failed payments)
-   */
-  static finishProcessingWithoutCooldown(address: string): void {
-    const normalizedAddress = address.toLowerCase();
-    const wasProcessing = this.processingAddresses.has(normalizedAddress);
-    this.processingAddresses.delete(normalizedAddress);
-    console.log(`✅ Finished processing address: ${address} (was processing: ${wasProcessing}) - NO COOLDOWN for failed payment`);
-    console.log(`📊 Remaining addresses being processed: ${this.processingAddresses.size}`);
-    console.log(`📱 Ready for immediate retry\n`);
+    console.log(`📱 Ready for next tap\n`);
   }
 
   /**
@@ -107,6 +76,5 @@ export class AddressProcessor {
   static debugState(): void {
     console.log(`📊 AddressProcessor Debug State:`);
     console.log(`   Processing addresses (${this.processingAddresses.size}):`, Array.from(this.processingAddresses));
-    console.log(`   Cooldown addresses (${this.addressCooldowns.size}):`, Array.from(this.addressCooldowns.keys()));
   }
 } 

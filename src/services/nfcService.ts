@@ -180,7 +180,7 @@ export class NFCService {
           
           // Don't resolve the promise - keep waiting for another tap
           // Just clean up the current address processing
-          AddressProcessor.finishProcessingWithoutCooldown(ethAddress);
+          AddressProcessor.finishProcessing(ethAddress);
           return; // Exit without resolving the promise
         }
         
@@ -206,13 +206,8 @@ export class NFCService {
         // Mark the address processing as complete
         console.log(`🏁 Finishing processing for address: ${ethAddress} (successful: ${paymentSuccessful})`);
         
-        if (paymentSuccessful) {
-          // Successful payment - apply cooldown to prevent spam
-          AddressProcessor.finishProcessing(ethAddress);
-        } else {
-          // Failed payment - no cooldown, allow immediate retry
-          AddressProcessor.finishProcessingWithoutCooldown(ethAddress);
-        }
+        // No more cooldown - just finish processing for all cases
+        AddressProcessor.finishProcessing(ethAddress);
       }
     } else {
       console.log('📱 Response is not an Ethereum address');

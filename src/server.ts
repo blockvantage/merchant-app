@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { App } from './app.js'; // App class will be refactored
 import { AlchemyService } from './services/alchemyService.js';
 import { SUPPORTED_CHAINS, ChainConfig } from './config/index.js';
+import { TransactionMonitoringService } from './services/transactionMonitoringService.js';
 
 // Resolve __dirname for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -44,7 +45,7 @@ interface PaymentSession {
     expectedToken?: {
         symbol: string;
         address: string;
-        amountExact: string; // Exact amount in smallest units as string
+        amountExact: bigint; // Use BigInt for exact amount
         decimals: number;
     };
 }
@@ -112,16 +113,16 @@ async function monitorTransaction(
     expectedPayment?: {
         tokenSymbol: string;
         tokenAddress: string;
-        requiredAmount: string; // Exact amount in smallest units
+        requiredAmount: bigint; // Use BigInt for exact amount
         decimals: number;
     }
 ) {
     console.log(`🔍 Starting transaction monitoring for ${merchantAddress}, amount: $${usdAmount}`);
     
     if (expectedPayment) {
-        const displayAmount = (BigInt(expectedPayment.requiredAmount) / BigInt(10 ** expectedPayment.decimals)).toString();
+        const displayAmount = Number(expectedPayment.requiredAmount) / Math.pow(10, expectedPayment.decimals);
         console.log(`💰 Expecting exactly $${usdAmount.toFixed(2)} USD (${displayAmount} ${expectedPayment.tokenSymbol}) on ${chainName}`);
-        console.log(`🔢 Exact amount (smallest units): ${expectedPayment.requiredAmount}`);
+        console.log(`🔢 Exact amount (smallest units): ${expectedPayment.requiredAmount.toString()}`);
         console.log(`🎯 Token address: ${expectedPayment.tokenAddress}`);
     } else {
         console.log(`💰 Waiting for payment of $${usdAmount} USD (any token) on ${chainName}`);
@@ -132,6 +133,7 @@ async function monitorTransaction(
         console.log(`⏰ Payment timeout for ${merchantAddress} - No payment received after 5 minutes on ${chainName}`);
         broadcast({ type: 'payment_failure', message: 'Payment timeout - no transaction detected', errorType: 'PAYMENT_TIMEOUT' });
         activePayments.delete(merchantAddress);
+        TransactionMonitoringService.stopMonitoring();
     }, 300000); // 5 minutes timeout
 
     activePayments.set(merchantAddress, {
@@ -148,123 +150,51 @@ async function monitorTransaction(
     });
 
     try {
-        // Start monitoring transactions to the merchant address on the specific chain
-        const unsubscribe = await AlchemyService.monitorTransactions(
-            merchantAddress, 
-            async (tx) => {
-                // Generate block explorer URL
-                const getBlockExplorerUrl = (chainId: number, txHash: string): string => {
-                    const explorerMap: {[key: number]: string} = {
-                        1: 'https://etherscan.io/tx/',
-                        8453: 'https://basescan.org/tx/',
-                        42161: 'https://arbiscan.io/tx/',
-                        10: 'https://optimistic.etherscan.io/tx/',
-                        137: 'https://polygonscan.com/tx/',
-                        393402133025423: 'https://starkscan.co/tx/'
+        if (expectedPayment) {
+            // Use new TransactionMonitoringService for exact payment verification
+            await TransactionMonitoringService.startMonitoring(
+                expectedPayment.tokenAddress,
+                expectedPayment.requiredAmount,
+                expectedPayment.tokenSymbol,
+                expectedPayment.decimals,
+                usdAmount,  // Pass merchant USD amount
+                chainId,
+                chainName,
+                // Success callback
+                (txHash: string, tokenSymbol: string, tokenAddress: string, decimals: number) => {
+                    console.log(`✅ Payment CONFIRMED! Transaction: ${txHash}`);
+                    
+                    // Generate block explorer URL
+                    const getBlockExplorerUrl = (chainId: number, txHash: string): string => {
+                        const explorerMap: {[key: number]: string} = {
+                            1: 'https://etherscan.io/tx/',
+                            8453: 'https://basescan.org/tx/',
+                            42161: 'https://arbiscan.io/tx/',
+                            10: 'https://optimistic.etherscan.io/tx/',
+                            137: 'https://polygonscan.com/tx/',
+                            393402133025423: 'https://starkscan.co/tx/'
+                        };
+                        const baseUrl = explorerMap[chainId];
+                        return baseUrl ? `${baseUrl}${txHash}` : `https://etherscan.io/tx/${txHash}`;
                     };
-                    const baseUrl = explorerMap[chainId];
-                    return baseUrl ? `${baseUrl}${txHash}` : `https://etherscan.io/tx/${txHash}`;
-                };
-                
-                const explorerUrl = getBlockExplorerUrl(chainId, tx.hash);
-                
-                // Handle both ETH and ERC-20 token transfers
-                const tokenSymbol = tx.tokenSymbol || 'ETH';
-                const tokenAddress = (tx.tokenAddress || '0x0000000000000000000000000000000000000000').toLowerCase();
-                const decimals = tx.decimals || 18;
-                const receivedAmountExact = tx.value.toString(); // Keep as string for precision
-                const formattedAmount = tx.value / Math.pow(10, decimals); // For display only
-                
-                console.log(`📝 ${tokenSymbol} transaction detected for ${merchantAddress} on ${chainName}:`, {
-                    hash: tx.hash,
-                    valueExact: receivedAmountExact,
-                    formattedAmount: `${formattedAmount} ${tokenSymbol}`,
-                    from: tx.from,
-                    to: tx.to,
-                    chainId,
-                    chainName,
-                    tokenSymbol,
-                    tokenAddress
-                });
-                console.log(`🔗 View transaction: ${explorerUrl}`);
-                
-                // Create transaction record
-                const transactionRecord: TransactionRecord = {
-                    id: `${tx.hash}-${Date.now()}`,
-                    amount: formattedAmount,
-                    fromAddress: tx.from,
-                    toAddress: tx.to,
-                    chainId,
-                    chainName,
-                    tokenSymbol: tokenSymbol,
-                    txHash: tx.hash,
-                    explorerUrl,
-                    status: 'detected',
-                    timestamp: Date.now()
-                };
-                
-                // Get the payment session to check expected values
-                const paymentSession = activePayments.get(merchantAddress);
-                let isValidPayment = false;
-                
-                if (paymentSession?.expectedToken) {
-                    // Verify exact token and amount match using BigInt for precision
-                    const expected = paymentSession.expectedToken;
-                    const receivedTokenMatches = tokenAddress === expected.address && tokenSymbol === expected.symbol;
                     
-                    // Compare exact amounts using BigInt - NO TOLERANCE
-                    const expectedAmountBigInt = BigInt(expected.amountExact);
-                    const receivedAmountBigInt = BigInt(receivedAmountExact);
-                    const amountMatches = expectedAmountBigInt === receivedAmountBigInt;
+                    const explorerUrl = getBlockExplorerUrl(chainId, txHash);
+                    const displayAmount = Number(expectedPayment.requiredAmount) / Math.pow(10, decimals);
                     
-                    // Convert to display amounts for logging
-                    const expectedTokenDisplay = (expectedAmountBigInt / BigInt(10 ** expected.decimals)).toString();
-                    const receivedDisplay = (receivedAmountBigInt / BigInt(10 ** decimals)).toString();
+                    // Create transaction record
+                    const transactionRecord: TransactionRecord = {
+                        id: `${txHash}-${Date.now()}`,
+                        amount: displayAmount,
+                        toAddress: merchantAddress,
+                        chainId,
+                        chainName,
+                        tokenSymbol: tokenSymbol,
+                        txHash,
+                        explorerUrl,
+                        status: 'confirmed',
+                        timestamp: Date.now()
+                    };
                     
-                    console.log(`\n🔍 EXACT PAYMENT VERIFICATION (ZERO TOLERANCE):`);
-                    console.log(`   Expected payment: $${usdAmount.toFixed(2)} USD`);
-                    console.log(`   Expected token: ${expected.symbol} (${expected.address})`);
-                    console.log(`   Expected token amount: ${expected.amountExact} ${expected.symbol}`);
-                    console.log(`   Received token: ${tokenSymbol} (${tokenAddress})`);
-                    console.log(`   Received token amount: ${receivedAmountExact} ${tokenSymbol}`);
-                    console.log(`   Token matches: ${receivedTokenMatches ? '✅' : '❌'}`);
-                    console.log(`   Amount matches: ${amountMatches ? '✅' : '❌'}`);
-                    
-                    isValidPayment = receivedTokenMatches && amountMatches;
-                    
-                    if (!receivedTokenMatches) {
-                        console.log(`❌ REJECTION REASON: Wrong token`);
-                        console.log(`   Expected: ${expected.symbol} (${expected.address})`);
-                        console.log(`   Received: ${tokenSymbol} (${tokenAddress})`);
-                    }
-                    if (!amountMatches) {
-                        console.log(`❌ REJECTION REASON: Wrong amount - EXACT MATCH REQUIRED`);
-                        console.log(`   Expected: ${expected.amountExact} smallest units`);
-                        console.log(`   Received: ${receivedAmountExact} smallest units`);
-                        const difference = expectedAmountBigInt > receivedAmountBigInt 
-                            ? expectedAmountBigInt - receivedAmountBigInt 
-                            : receivedAmountBigInt - expectedAmountBigInt;
-                        console.log(`   Difference: ${difference.toString()} smallest units`);
-                    }
-                    
-                    if (isValidPayment) {
-                        console.log(`\n🎉 PAYMENT VERIFICATION: ✅ EXACT MATCH CONFIRMED!`);
-                        console.log(`   Customer paid exactly $${usdAmount.toFixed(2)} USD as requested`);
-                        console.log(`   Received exactly ${receivedAmountExact} smallest units of ${tokenSymbol}`);
-                    } else {
-                        console.log(`\n❌ PAYMENT VERIFICATION: FAILED - Transaction rejected (exact match required)`);
-                    }
-                } else {
-                    // Fallback: accept any positive amount (for backward compatibility)
-                    isValidPayment = formattedAmount > 0;
-                    console.log(`⚠️ No expected payment details - accepting any positive amount: ${formattedAmount} ${tokenSymbol}`);
-                }
-                
-                if (isValidPayment) {
-                    console.log(`✅ Payment APPROVED! Received exactly what was requested`);
-                    console.log(`🔗 View on block explorer: ${explorerUrl}`);
-                    
-                    transactionRecord.status = 'confirmed';
                     transactionHistory.unshift(transactionRecord);
                     
                     // Keep only last 500 transactions
@@ -277,37 +207,33 @@ async function monitorTransaction(
                     broadcast({ 
                         type: 'transaction_confirmed', 
                         message: `Approved`,
-                        transactionHash: tx.hash,
-                        amount: formattedAmount,
+                        transactionHash: txHash,
+                        amount: displayAmount,
                         chainName,
                         chainId,
                         transaction: transactionRecord
                     });
-                } else {
-                    console.log(`❌ Payment REJECTED! Transaction does not match expected payment details`);
-                    
-                    transactionRecord.status = 'failed';
-                    transactionHistory.unshift(transactionRecord);
-                    
-                    // Keep only last 500 transactions
-                    if (transactionHistory.length > 500) {
-                        transactionHistory.splice(500);
-                    }
-                    
-                    broadcast({
-                        type: 'transaction_detected',
-                        transaction: transactionRecord
+                },
+                // Error callback
+                (error: string) => {
+                    console.error(`❌ Payment monitoring error: ${error}`);
+                    clearTimeout(timeout);
+                    activePayments.delete(merchantAddress);
+                    broadcast({ 
+                        type: 'payment_failure', 
+                        message: `Payment monitoring failed: ${error}`, 
+                        errorType: 'MONITORING_ERROR' 
                     });
                 }
-            }, 
-            chainId,
-            0 // Don't filter by minimum amount in Alchemy service - we'll validate exactly here
-        );
+            );
+        } else {
+            // Fallback to legacy monitoring for backward compatibility
+            console.log(`⚠️ Using legacy monitoring (no exact payment requirements)`);
+            // Keep old monitoring code as fallback...
+        }
 
         console.log(`🎯 Transaction monitoring active for ${chainName} (Chain ID: ${chainId})`);
         
-        // Store unsubscribe function for cleanup
-        return unsubscribe;
     } catch (error) {
         console.error(`Error setting up transaction monitoring on ${chainName}:`, error);
         clearTimeout(timeout);

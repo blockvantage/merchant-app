@@ -18,17 +18,17 @@ export class PaymentService {
   /**
    * Generate EIP-681 format URI for payment request with chain ID support
    */
-  static generateEIP681Uri(amount: number, tokenAddress: string, decimals: number, chainId: number): string {
-    const amountInSmallestUnits = Math.floor(amount * Math.pow(10, decimals));
+  static generateEIP681Uri(amount: bigint, tokenAddress: string, chainId: number): string {
+    const amountString = amount.toString();
     
     if (EthereumService.isEthAddress(tokenAddress)) {
       // ETH payment request with chain ID
       // Format: ethereum:<recipient>@<chainId>?value=<amount>
-      return `ethereum:${RECIPIENT_ADDRESS}@${chainId}?value=${amountInSmallestUnits}`;
+      return `ethereum:${RECIPIENT_ADDRESS}@${chainId}?value=${amountString}`;
     } else {
       // ERC-20 token payment request with chain ID
       // Format: ethereum:<recipient>@<chainId>/transfer?address=<tokenContract>&uint256=<amount>
-      return `ethereum:${tokenAddress}@${chainId}/transfer?address=${RECIPIENT_ADDRESS}&uint256=${amountInSmallestUnits}`;
+      return `ethereum:${tokenAddress}@${chainId}/transfer?address=${RECIPIENT_ADDRESS}&uint256=${amountString}`;
     }
   }
 
@@ -79,11 +79,9 @@ export class PaymentService {
    * Send payment request via NFC using NDEF formatting
    * This will make Android automatically open the URI with wallet apps
    */
-  static async sendPaymentRequest(reader: Reader, amountString: string, tokenAddress: string, decimals: number = 18, chainId: number = 1): Promise<void> {
+  static async sendPaymentRequest(reader: Reader, amount: bigint, tokenAddress: string, decimals: number, chainId: number): Promise<void> {
     try {
-      // Convert amount to appropriate units for EIP-681
-      const amount = parseFloat(amountString);
-      const eip681Uri = this.generateEIP681Uri(amount, tokenAddress, decimals, chainId);
+      const eip681Uri = this.generateEIP681Uri(amount, tokenAddress, chainId);
       
       const chainName = this.getChainName(chainId);
       console.log(`\n💳 Sending EIP-681 payment request for ${chainName} (Chain ID: ${chainId}):`);
@@ -142,7 +140,7 @@ export class PaymentService {
    */
   static async calculateAndSendPayment(tokensWithPrices: TokenWithPrice[], reader: Reader, targetUSD: number): Promise<{
     selectedToken: TokenWithPrice;
-    requiredAmount: string; // Exact amount in smallest units as string
+    requiredAmount: bigint; // Amount in smallest units as BigInt
     chainId: number;
     chainName: string;
   }> {
@@ -219,34 +217,33 @@ export class PaymentService {
     // Smart payment selection: prefer L2 stablecoins, then follow priority order
     const selectedToken = this.selectBestPaymentToken(viableTokens);
     
-    // Calculate exact amount in smallest units for precise comparison
-    // This is the ONLY amount calculation - everything else derives from this
+    // Calculate exact amount in smallest units using BigInt arithmetic
     const targetUSDCents = Math.round(targetUSD * 1e8); // Convert to 8 decimal precision
     const priceUSDCents = Math.round(selectedToken.priceUSD * 1e8);
-    const requiredAmountExact = (BigInt(targetUSDCents) * BigInt(10 ** selectedToken.decimals) / BigInt(priceUSDCents)).toString();
+    const requiredAmount = (BigInt(targetUSDCents) * BigInt(10 ** selectedToken.decimals)) / BigInt(priceUSDCents);
     
-    // Convert exact amount back to token units for display and payment request
-    const requiredAmountForDisplay = (BigInt(requiredAmountExact) / BigInt(10 ** selectedToken.decimals)).toString();
+    // Convert to display format
+    const displayAmount = Number(requiredAmount) / Math.pow(10, selectedToken.decimals);
     
     console.log(`\n🎯 SELECTED PAYMENT:`);
+    console.log(`💰 Merchant amount: $${targetUSD.toFixed(2)} USD`);
     console.log(`💳 Token: ${selectedToken.symbol}`);
-    console.log(`💰 Amount: ${requiredAmountForDisplay} ${selectedToken.symbol}`);
-    console.log(`🔢 Exact amount: ${requiredAmountExact}`);
+    console.log(`🔢 Token amount: ${displayAmount} ${selectedToken.symbol}`);
+    console.log(`📊 Exact amount: ${requiredAmount.toString()} smallest units`);
     console.log(`⛓️  Chain: ${selectedToken.chainDisplayName} (Chain ID: ${selectedToken.chainId})`);
-    console.log(`💵 Value: $${selectedToken.priceUSD.toFixed(4)} per ${selectedToken.symbol}`);
+    console.log(`💵 Price: $${selectedToken.priceUSD.toFixed(4)} per ${selectedToken.symbol}`);
     console.log(`🔍 Payment will be monitored on: ${selectedToken.chainDisplayName}`);
     
-    // Send payment request using the exact amount converted back to token units
-    // This ensures the payment request and monitoring use EXACTLY the same amount
-    await this.sendPaymentRequest(reader, requiredAmountForDisplay, selectedToken.address, selectedToken.decimals, selectedToken.chainId);
+    // Send payment request using the exact amount
+    await this.sendPaymentRequest(reader, requiredAmount, selectedToken.address, selectedToken.decimals, selectedToken.chainId);
     
-    console.log(`✅ Payment request sent for exactly ${requiredAmountExact} ${selectedToken.symbol}`);
-    console.log(`📱 Customer will be asked to pay ${requiredAmountForDisplay} ${selectedToken.symbol}`);
+    console.log(`✅ Payment request sent for exactly ${requiredAmount.toString()} smallest units`);
+    console.log(`📱 Customer will be asked to pay ${displayAmount} ${selectedToken.symbol}`);
     
-    // Return information needed for monitoring - use the exact amount for both
+    // Return information needed for monitoring
     return {
       selectedToken,
-      requiredAmount: requiredAmountExact, // This is the exact amount in smallest units
+      requiredAmount, // BigInt amount in smallest units
       chainId: selectedToken.chainId,
       chainName: selectedToken.chainDisplayName
     };
