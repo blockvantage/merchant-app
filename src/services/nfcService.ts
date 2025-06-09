@@ -19,8 +19,16 @@ export class NFCService {
   private cardHandlerResolve: ((result: { success: boolean; message: string; errorType?: string; paymentInfo?: any }) => void) | null = null;
   private walletScanPromise: Promise<{ success: boolean; message: string; address?: string; errorType?: string }> | null = null;
   private walletScanResolve: ((result: { success: boolean; message: string; address?: string; errorType?: string }) => void) | null = null;
+  
+  // Add instance tracking
+  private static instanceCount = 0;
+  private instanceId: number;
 
   constructor() {
+    NFCService.instanceCount++;
+    this.instanceId = NFCService.instanceCount;
+    console.log(`🏗️ DEBUG: Creating NFCService instance #${this.instanceId} (total instances: ${NFCService.instanceCount})`);
+    
     this.nfc = new NFC();
     this.setupNFC();
   }
@@ -29,10 +37,11 @@ export class NFCService {
    * Setup NFC readers and event handlers
    */
   private setupNFC(): void {
+    console.log(`🔧 DEBUG: Instance #${this.instanceId} - Setting up NFC readers`);
     this.nfc.on('reader', (reader: Reader) => {
-      console.log('💳 NFC Reader Detected:', reader.name);
+      console.log(`💳 Instance #${this.instanceId} - NFC Reader Detected:`, reader.name);
       reader.aid = AID; // ★ IMPORTANT ★ Set AID immediately
-      console.log('🔑 AID set for reader:', AID);
+      console.log(`🔑 Instance #${this.instanceId} - AID set for reader:`, AID);
       broadcast({ type: 'nfc_status', message: `Reader connected: ${reader.name}`});
       this.setupReaderEvents(reader);
     });
@@ -42,21 +51,25 @@ export class NFCService {
    * Setup event handlers for a specific reader
    */
   private setupReaderEvents(reader: Reader): void {
+    console.log(`🔧 DEBUG: Instance #${this.instanceId} - Setting up event handlers for reader: ${reader.name}`);
+    
+    // Use arrow functions to preserve 'this' context
     (reader as any).on('card', async (card: CardData) => {
+      console.log(`🔧 DEBUG: Instance #${this.instanceId} - Card event handler called, this.paymentArmed = ${this.paymentArmed}`);
       await this.handleCard(reader, card);
     });
 
     (reader as any).on('error', (err: Error) => {
       if (err.message.includes('Cannot process ISO 14443-4 tag')) {
-        console.log('💳 Payment card detected - ignoring tap');
+        console.log(`💳 Instance #${this.instanceId} - Payment card detected - ignoring tap`);
         broadcast({ type: 'nfc_status', message: 'Payment card detected - not supported' });
         return;
       }
-      console.error('❌ Reader error:', err);
+      console.error(`❌ Instance #${this.instanceId} - Reader error:`, err);
     });
 
     (reader as any).on('end', () => {
-      console.log('🔌 Reader disconnected:', reader.name);
+      console.log(`🔌 Instance #${this.instanceId} - Reader disconnected:`, reader.name);
       broadcast({ type: 'nfc_status', message: `Reader disconnected: ${reader.name}` });
     });
   }
@@ -65,13 +78,19 @@ export class NFCService {
    * Handle card detection and processing
    */
   private async handleCard(reader: Reader, card: CardData): Promise<void> {
+    console.log(`🔧 DEBUG: Instance #${this.instanceId} - Card event handler called, this.paymentArmed = ${this.paymentArmed}`);
     console.log('📱 Card Detected:', {
       type: card.type,
       standard: card.standard
     });
 
+    // Debug: Log current armed state when card is detected
+    console.log(`🔍 DEBUG: Instance #${this.instanceId} - Armed state check - paymentArmed: ${this.paymentArmed}, walletScanArmed: ${this.walletScanArmed}`);
+    console.log(`🔍 DEBUG: Instance #${this.instanceId} - Current payment amount: ${this.currentPaymentAmount}`);
+    console.log(`🔍 DEBUG: Instance #${this.instanceId} - Card handler resolve exists: ${!!this.cardHandlerResolve}`);
+
     if (!this.paymentArmed && !this.walletScanArmed) {
-      console.log('💤 Reader not armed for payment or wallet scan, ignoring tap');
+      console.log(`💤 Instance #${this.instanceId} - Reader not armed for payment or wallet scan, ignoring tap`);
       broadcast({ type: 'nfc_status', message: 'Reader not armed' });
       return;
     }
@@ -113,9 +132,8 @@ export class NFCService {
         this.cardHandlerResolve({ success: false, message: 'Error processing card', errorType: 'CARD_ERROR' });
         this.cardHandlerResolve = null;
       }
-    } finally {
-      reader.close(); // free the reader for the next tap
     }
+    // Note: Do NOT close the reader here - it needs to stay connected for future card detections
   }
 
   /**
@@ -230,9 +248,19 @@ export class NFCService {
    * Arm the service for payment and wait for a card tap
    */
   public async armForPaymentAndAwaitTap(amount: number): Promise<{ success: boolean; message: string; errorType?: string; paymentInfo?: any }> {
+    console.log(`🔧 DEBUG: Instance #${this.instanceId} - Arming payment service for $${amount.toFixed(2)}`);
+    
+    // Clean up any leftover state from previous sessions
+    if (this.paymentArmed || this.cardHandlerResolve || this.cardHandlerPromise) {
+      console.log(`⚠️ WARNING: Instance #${this.instanceId} - Found leftover payment state, cleaning up...`);
+      console.log(`🔍 Previous state - paymentArmed: ${this.paymentArmed}, cardHandlerResolve: ${!!this.cardHandlerResolve}, cardHandlerPromise: ${!!this.cardHandlerPromise}`);
+      this.disarmPayment();
+    }
+    
     this.paymentArmed = true;
     this.currentPaymentAmount = amount;
-    console.log(`💰 NFCService: Armed for payment of $${amount.toFixed(2)}. Waiting for tap...`);
+    console.log(`💰 NFCService: Instance #${this.instanceId} - Armed for payment of $${amount.toFixed(2)}. Waiting for tap...`);
+    console.log(`🔍 DEBUG: Instance #${this.instanceId} - After arming - paymentArmed: ${this.paymentArmed}, amount: ${this.currentPaymentAmount}`);
     
     // Debug: Show current address processing state
     AddressProcessor.debugState();
@@ -244,6 +272,7 @@ export class NFCService {
 
     // Set a timeout for the payment (30 seconds)
     const timeoutId = setTimeout(() => {
+      console.log(`⏰ DEBUG: Payment timeout reached, disarming...`);
       if (this.cardHandlerResolve) {
         this.cardHandlerResolve({ success: false, message: 'Payment timeout', errorType: 'TIMEOUT' });
         this.cardHandlerResolve = null;
@@ -253,10 +282,12 @@ export class NFCService {
 
     try {
       const result = await this.cardHandlerPromise;
+      console.log(`🔧 DEBUG: Card handler promise resolved, clearing timeout and disarming`);
       clearTimeout(timeoutId);
       this.disarmPayment();
       return result;
     } catch (error) {
+      console.log(`🔧 DEBUG: Card handler promise error, clearing timeout and disarming`);
       clearTimeout(timeoutId);
       this.disarmPayment();
       return { success: false, message: 'Payment processing error', errorType: 'PROCESSING_ERROR' };
@@ -267,6 +298,7 @@ export class NFCService {
    * Disarm the payment service
    */
   private disarmPayment(): void {
+    console.log(`🔧 DEBUG: Instance #${this.instanceId} - disarmPayment() called - was armed: ${this.paymentArmed}`);
     this.paymentArmed = false;
     this.currentPaymentAmount = null;
     this.cardHandlerPromise = null;
@@ -274,7 +306,7 @@ export class NFCService {
     
     // Clean up any stuck address processing states when disarming
     // This is a safety measure to ensure addresses don't stay locked
-    console.log('🧹 Cleaning up any stuck address processing states...');
+    console.log(`🧹 Instance #${this.instanceId} - Cleaning up any stuck address processing states...`);
     AddressProcessor.clearAllProcessing();
   }
 
@@ -355,6 +387,7 @@ export class NFCService {
    */
   public cancelCurrentOperation(): void {
     console.log('🚫 Cancelling current NFC operation...');
+    console.log(`🔧 DEBUG: cancelCurrentOperation() - paymentArmed: ${this.paymentArmed}, walletScanArmed: ${this.walletScanArmed}`);
     
     // Cancel payment operation if active
     if (this.paymentArmed && this.cardHandlerResolve) {

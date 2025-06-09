@@ -71,26 +71,4 @@ export class App {
         this.nfcService.stopListening(); // NFCService would need this method
     }
   }
-}
-
-// Create and start the application
-const app = new App();
-
-// Handle graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n👋 Received SIGINT, shutting down gracefully...');
-  app.stopServices();
-  process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-  console.log('\n👋 Received SIGTERM, shutting down gracefully...');
-  app.stopServices();
-  process.exit(0);
-});
-      
-// Start the app
-app.initializeServices().catch(error => {
-  console.error('❌ Failed to start application:', error);
-  process.exit(1);
-}); 
+} 
