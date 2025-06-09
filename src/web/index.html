@@ -611,6 +611,9 @@
                     case 'payment_cancelled':
                         console.log('Payment cancelled:', data.message);
                         // Hide NFC screen and return to main
+                        const nfcScreen = document.getElementById('nfcScreen');
+                        const nfcSubmessage = nfcScreen.querySelector('.nfc-submessage');
+                        nfcSubmessage.style.display = 'none'; // Hide NFC instruction during cancel
                         document.getElementById('nfcScreen').style.display = 'none';
                         resetUI();
                         break;
@@ -656,6 +659,7 @@
         function showWaitingPayment(amount) {
             const nfcScreen = document.getElementById('nfcScreen');
             const nfcAmount = document.getElementById('nfcAmount');
+            const nfcSubmessage = nfcScreen.querySelector('.nfc-submessage');
             const spinner = nfcScreen.querySelector('.spinner');
             const checkmark = nfcScreen.querySelector('.checkmark');
             const cancelButton = nfcScreen.querySelector('.cancel-button');
@@ -664,6 +668,9 @@
             nfcScreen.classList.add('waiting-payment');
             nfcScreen.classList.remove('error', 'payment-approved');
             nfcAmount.textContent = `$${amount.toFixed(2)}`;
+            
+            // Hide the NFC reader instruction message during payment waiting
+            nfcSubmessage.style.display = 'none';
             
             spinner.style.display = 'block';
             checkmark.style.display = 'none';
@@ -711,6 +718,7 @@
         function showError(message) {
             const nfcScreen = document.getElementById('nfcScreen');
             const nfcMessage = nfcScreen.querySelector('.nfc-message');
+            const nfcSubmessage = nfcScreen.querySelector('.nfc-submessage');
             const spinner = nfcScreen.querySelector('.spinner');
             const checkmark = nfcScreen.querySelector('.checkmark');
             const cancelButton = nfcScreen.querySelector('.cancel-button');
@@ -719,6 +727,9 @@
             nfcScreen.classList.add('error');
             nfcScreen.classList.remove('waiting-payment', 'payment-approved');
             nfcMessage.textContent = message;
+            
+            // Hide the NFC reader instruction message during error
+            nfcSubmessage.style.display = 'none';
             
             spinner.style.display = 'none';
             checkmark.style.display = 'none';
@@ -1009,6 +1020,11 @@
             // Reset processing state
             isProcessing = false;
             
+            // Hide NFC instruction message before closing screen
+            const nfcScreen = document.getElementById('nfcScreen');
+            const nfcSubmessage = nfcScreen.querySelector('.nfc-submessage');
+            nfcSubmessage.style.display = 'none';
+            
             // Hide NFC screen and return to main screen
             document.getElementById('nfcScreen').style.display = 'none';
             resetUI();
@@ -1040,6 +1056,7 @@
             
             nfcMessage.textContent = 'Phone Moved Too Quickly';
             nfcSubmessage.innerHTML = 'Please keep phone steady<br>Returning to waiting...';
+            nfcSubmessage.style.display = 'block'; // Show temporarily for this specific error
             nfcAmount.style.display = 'none';
             spinner.style.display = 'none';
             checkmark.style.display = 'none';
@@ -1052,7 +1069,7 @@
                 nfcScreen.classList.add('waiting-payment');
                 
                 nfcMessage.textContent = 'Waiting for tap';
-                nfcSubmessage.innerHTML = 'Hold your phone near the NFC reader<br><span class="loading-dots">Processing</span>';
+                nfcSubmessage.style.display = 'none'; // Hide NFC instruction when returning to waiting
                 nfcAmount.style.display = 'block';
                 spinner.style.display = 'block';
                 cancelButton.style.display = 'block';

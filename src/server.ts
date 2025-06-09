@@ -416,7 +416,7 @@ const cancelPaymentHandler: AsyncRequestHandler = async (req, res) => {
         
         broadcast({ 
             type: 'payment_cancelled', 
-            message: 'Payment cancelled by user' 
+            message: 'Payment cancelled' 
         });
         
         res.json({ success: true, message: 'Payment cancelled successfully' });
