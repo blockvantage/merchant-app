@@ -1762,16 +1762,7 @@ sync
 sleep 2
 sync
 
-# Check filesystem integrity before unmounting
-echo "🔍 Pre-unmount filesystem integrity check..."
-if ! e2fsck -n "$ROOT_DEV"; then
-    echo "⚠️ Filesystem errors detected, attempting repair..."
-    e2fsck -f -y "$ROOT_DEV" || {
-        echo "❌ CRITICAL: Filesystem repair failed"
-        echo "❌ BUILD FAILED: Image would be corrupted"
-        exit 1
-    }
-fi
+# Note: Filesystem integrity check will be performed after unmounting
 
 # Unmount filesystems gracefully with multiple attempts
 echo "📤 Unmounting filesystems..."
@@ -1808,7 +1799,19 @@ if mountpoint -q "$MOUNT_BOOT" || mountpoint -q "$MOUNT_ROOT"; then
     exit 1
 fi
 
-# Final comprehensive filesystem check and repair
+# Filesystem integrity check and repair (now safe to do after unmount)
+echo "🔍 Post-unmount filesystem integrity check..."
+if ! e2fsck -n "$ROOT_DEV"; then
+    echo "⚠️ Filesystem errors detected, attempting repair..."
+    if ! e2fsck -f -y "$ROOT_DEV"; then
+        echo "❌ CRITICAL: Filesystem repair failed"
+        echo "❌ BUILD FAILED: Image would be corrupted"
+        exit 1
+    fi
+    echo "✅ Filesystem repaired successfully"
+fi
+
+# Final comprehensive filesystem check
 echo "🔍 Final comprehensive filesystem check..."
 if ! e2fsck -f -y "$ROOT_DEV"; then
     echo "❌ CRITICAL: Final filesystem check failed"
