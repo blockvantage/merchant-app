@@ -212,6 +212,38 @@ Custom Raspberry Pi OS Image
 
 ## Executor's Feedback or Assistance Requests
 
+### 🔄 Current Task: Adding Disconnected Icon for Alchemy Connection Errors
+
+**✅ Task Completed**: Connection Status Integration with Charge Button
+- **UI Enhancement**: Integrated connection status directly into charge button:
+  - **Connected**: Green gradient button, fully functional
+  - **Disconnected**: Yellow/orange gradient button with pulse animation, disabled
+  - **Disconnect Icon**: Network disconnect icon (📡❌) appears on left of "CHARGE" text when disconnected
+  - **Removed**: Top-right header and connection indicator (cleaner UI)
+- **Backend Monitoring**: Created `ConnectionMonitorService` with:
+  - 30-second interval health checks to Alchemy API
+  - Network timeout handling (10-second timeout)
+  - Error categorization (timeout, network, API errors)
+  - WebSocket broadcasting of status changes
+- **Smart Button Logic**: 
+  - Button disabled when: no amount entered, processing payment, OR disconnected
+  - Connection status takes priority - button stays disabled until connection restored
+  - Visual feedback through color change and icon display
+
+**Files Modified**:
+- `src/web/index.html` - Integrated connection status into charge button UI and logic
+- `src/services/connectionMonitorService.ts` - New service for monitoring Alchemy connectivity  
+- `src/server.ts` - Integrated monitoring service and WebSocket broadcasting
+
+**Testing Status**: ✅ Build successful, ready for manual testing
+
+**Success Criteria Met**:
+- ✅ Charge button shows disconnection status directly (no separate indicator)
+- ✅ Button becomes yellow and disabled when disconnected
+- ✅ Network disconnect icon appears on left of "CHARGE" text
+- ✅ Monitors actual Alchemy API connectivity with real-time updates
+- ✅ Clean UI with no unnecessary header elements
+
 ### Completed Tasks (Executor Report):
 
 ✅ **Task 1.1 - Build Environment Setup**: Created `setup-build-environment.sh` with:

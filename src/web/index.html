@@ -34,22 +34,9 @@
             max-width: 100%;
         }
 
-        .header {
-            text-align: center;
-            color: white;
-            margin-bottom: 20px;
-        }
 
-        .header h1 {
-            font-size: 2.5rem;
-            font-weight: 300;
-            margin-bottom: 10px;
-        }
 
-        .header p {
-            font-size: 1.2rem;
-            opacity: 0.9;
-        }
+
 
         .display-section {
             background: rgba(255, 255, 255, 0.95);
@@ -147,6 +134,10 @@
             box-shadow: 0 10px 30px rgba(40, 167, 69, 0.3);
             text-transform: uppercase;
             letter-spacing: 2px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
         }
 
         .done-button:hover {
@@ -163,6 +154,33 @@
             cursor: not-allowed;
             transform: none;
             box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .done-button.disconnected {
+            background: linear-gradient(135deg, #ffc107, #fd7e14);
+            box-shadow: 0 10px 30px rgba(255, 193, 7, 0.3);
+            cursor: not-allowed;
+            animation: pulse-warning 2s infinite;
+        }
+
+        .done-button.disconnected:hover {
+            transform: none;
+            box-shadow: 0 10px 30px rgba(255, 193, 7, 0.3);
+        }
+
+        .disconnect-icon {
+            font-size: 1.8rem;
+            display: none;
+        }
+
+        .done-button.disconnected .disconnect-icon {
+            display: inline;
+        }
+
+        @keyframes pulse-warning {
+            0% { opacity: 1; }
+            50% { opacity: 0.8; }
+            100% { opacity: 1; }
         }
 
         /* NFC Status Screen */
@@ -501,7 +519,6 @@
 <body>
     <div class="container">
 
-
         <div class="display-section">
             <div class="amount-display" id="amountDisplay">$0.00</div>
         </div>
@@ -522,6 +539,7 @@
         </div>
 
         <button class="done-button" id="doneButton" onclick="startPayment()">
+            <span class="disconnect-icon" id="disconnectIcon">📡❌</span>
             Charge
         </button>
     </div>
@@ -597,6 +615,9 @@
                     case 'status':
                         updateStatus(data.message, data.isError);
                         break;
+                    case 'connection_status':
+                        updateConnectionStatus(data.connected, data.message);
+                        break;
                     case 'payment_success':
                         showWaitingPayment(data.amount);
                         break;
@@ -654,6 +675,26 @@
                 nfcScreen.classList.add('error');
                 nfcScreen.classList.remove('waiting-payment', 'payment-approved');
             }
+        }
+
+        function updateConnectionStatus(connected, message = '') {
+            const doneButton = document.getElementById('doneButton');
+            const disconnectIcon = document.getElementById('disconnectIcon');
+            
+            if (connected) {
+                doneButton.classList.remove('disconnected');
+                doneButton.disabled = false;
+                console.log('Connection restored - Charge button enabled');
+            } else {
+                doneButton.classList.add('disconnected');
+                doneButton.disabled = true;
+                console.log(`Connection lost - Charge button disabled: ${message || 'Disconnected'}`);
+            }
+            
+            // Update button state for existing amount check
+            updateDoneButton();
+            
+            console.log(`Connection status updated: ${connected ? 'Connected' : 'Disconnected'}`);
         }
 
         function showWaitingPayment(amount) {
@@ -792,7 +833,10 @@
 
         function updateDoneButton() {
             const button = document.getElementById('doneButton');
-            button.disabled = currentCents <= 0 || isProcessing;
+            const isDisconnected = button.classList.contains('disconnected');
+            
+            // Button is disabled if: no amount, processing, or disconnected
+            button.disabled = currentCents <= 0 || isProcessing || isDisconnected;
         }
 
         function addDigit(digit) {

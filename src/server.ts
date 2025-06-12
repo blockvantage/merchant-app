@@ -8,6 +8,7 @@ import { App } from './app.js'; // App class will be refactored
 import { AlchemyService } from './services/alchemyService.js';
 import { SUPPORTED_CHAINS, ChainConfig } from './config/index.js';
 import { TransactionMonitoringService } from './services/transactionMonitoringService.js';
+import { ConnectionMonitorService } from './services/connectionMonitorService.js';
 
 // Resolve __dirname for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -469,6 +470,19 @@ async function startServerAndApp() {
         try {
             AlchemyService.initialize();
             console.log('✅ AlchemyService initialized successfully');
+
+            // Start connection monitoring
+            console.log('🔍 Starting connection monitoring...');
+            ConnectionMonitorService.startMonitoring((status) => {
+                // Broadcast connection status to all connected clients
+                broadcast({
+                    type: 'connection_status',
+                    connected: status.connected,
+                    message: status.errorMessage || (status.connected ? 'Connected' : 'Disconnected'),
+                    timestamp: status.lastCheck
+                });
+            });
+            console.log('✅ Connection monitoring started');
         } catch (error) {
             console.error('❌ Failed to initialize AlchemyService:', error);
             throw error;
@@ -505,6 +519,13 @@ function shutdown(signal: string) {
         AlchemyService.cleanup();
     } catch (error) {
         console.error('Error cleaning up Alchemy subscriptions:', error);
+    }
+
+    // Stop connection monitoring
+    try {
+        ConnectionMonitorService.stopMonitoring();
+    } catch (error) {
+        console.error('Error stopping connection monitoring:', error);
     }
     
     // Close WebSocket clients first
