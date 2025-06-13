@@ -166,8 +166,14 @@ export class NFCService {
         // Update UI to show loading tokens
         broadcast({ type: 'status', message: 'Loading tokens...' });
         
-        // Fetch balances from Alchemy API across all supported chains
-        const portfolio = await AlchemyService.fetchMultiChainBalances(ethAddress);
+        let portfolio;
+        try {
+          // Fetch balances from Alchemy API across all supported chains
+          portfolio = await AlchemyService.fetchMultiChainBalances(ethAddress);
+        } catch (fetchError: any) {
+          console.error('💥 Error fetching tokens from Alchemy:', fetchError);
+          throw new Error('FAILED_TO_FETCH_TOKENS');
+        }
         
         // Calculate and send payment request using all tokens across all chains
         const paymentInfo = await PaymentService.calculateAndSendPayment(portfolio.allTokens, reader, amount);
@@ -212,7 +218,10 @@ export class NFCService {
           let errorMessage: string;
           let errorType: string;
           
-          if (balanceError.message === "Customer doesn't have enough funds") {
+          if (balanceError.message === 'FAILED_TO_FETCH_TOKENS') {
+            errorMessage = 'Failed to fetch tokens';
+            errorType = 'TOKEN_FETCH_ERROR';
+          } else if (balanceError.message === "Customer doesn't have enough funds") {
             errorMessage = balanceError.message;
             errorType = 'PAYMENT_ERROR';
           } else {

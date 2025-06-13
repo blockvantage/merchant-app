@@ -625,6 +625,8 @@
                         // Check if this is a "phone moved too quickly" error
                         if (data.errorType === 'PHONE_MOVED_TOO_QUICKLY') {
                             showPhoneMovedTooQuickly();
+                        } else if (data.errorType === 'TOKEN_FETCH_ERROR') {
+                            showError(data.message); // Shows "Failed to fetch tokens"
                         } else {
                             showError(data.message);
                         }
