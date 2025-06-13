@@ -8,6 +8,7 @@ import { App } from './app.js'; // App class will be refactored
 import { AlchemyService } from './services/alchemyService.js';
 import { SUPPORTED_CHAINS, ChainConfig } from './config/index.js';
 import { TransactionMonitoringService } from './services/transactionMonitoringService.js';
+import { RealtimeTransactionMonitor } from './services/realtimeTransactionMonitor.js';
 import { ConnectionMonitorService } from './services/connectionMonitorService.js';
 
 // Resolve __dirname for ES modules
@@ -135,6 +136,7 @@ async function monitorTransaction(
         broadcast({ type: 'payment_failure', message: 'Payment timeout - no transaction detected', errorType: 'PAYMENT_TIMEOUT' });
         activePayments.delete(merchantAddress);
         TransactionMonitoringService.stopMonitoring();
+        RealtimeTransactionMonitor.stopMonitoring();
     }, 300000); // 5 minutes timeout
 
     activePayments.set(merchantAddress, {
@@ -152,15 +154,17 @@ async function monitorTransaction(
 
     try {
         if (expectedPayment) {
-            // Use new TransactionMonitoringService for exact payment verification
-            await TransactionMonitoringService.startMonitoring(
-                expectedPayment.tokenAddress,
-                expectedPayment.requiredAmount,
-                expectedPayment.tokenSymbol,
-                expectedPayment.decimals,
-                usdAmount,  // Pass merchant USD amount
-                chainId,
-                chainName,
+            // Try real-time WebSocket monitoring first, with fallback to polling
+            try {
+                console.log(`🚀 Starting real-time WebSocket monitoring for ${chainName}`);
+                await RealtimeTransactionMonitor.startMonitoring(
+                    expectedPayment.tokenAddress,
+                    expectedPayment.requiredAmount,
+                    expectedPayment.tokenSymbol,
+                    expectedPayment.decimals,
+                    usdAmount,  // Pass merchant USD amount
+                    chainId,
+                    chainName,
                 // Success callback
                 (txHash: string, tokenSymbol: string, tokenAddress: string, decimals: number) => {
                     console.log(`✅ Payment CONFIRMED! Transaction: ${txHash}`);
@@ -226,7 +230,83 @@ async function monitorTransaction(
                         errorType: 'MONITORING_ERROR' 
                     });
                 }
-            );
+                );
+            } catch (realtimeError) {
+                console.warn(`⚠️  Real-time monitoring failed, falling back to polling:`, realtimeError);
+                
+                // Fallback to original polling-based monitoring
+                await TransactionMonitoringService.startMonitoring(
+                    expectedPayment.tokenAddress,
+                    expectedPayment.requiredAmount,
+                    expectedPayment.tokenSymbol,
+                    expectedPayment.decimals,
+                    usdAmount,
+                    chainId,
+                    chainName,
+                    // Success callback (same as above)
+                    (txHash: string, tokenSymbol: string, tokenAddress: string, decimals: number) => {
+                        console.log(`✅ Payment CONFIRMED via polling! Transaction: ${txHash}`);
+                        
+                        const getBlockExplorerUrl = (chainId: number, txHash: string): string => {
+                            const explorerMap: {[key: number]: string} = {
+                                1: 'https://etherscan.io/tx/',
+                                8453: 'https://basescan.org/tx/',
+                                42161: 'https://arbiscan.io/tx/',
+                                10: 'https://optimistic.etherscan.io/tx/',
+                                137: 'https://polygonscan.com/tx/',
+                                393402133025423: 'https://starkscan.co/tx/'
+                            };
+                            const baseUrl = explorerMap[chainId];
+                            return baseUrl ? `${baseUrl}${txHash}` : `https://etherscan.io/tx/${txHash}`;
+                        };
+                        
+                        const explorerUrl = getBlockExplorerUrl(chainId, txHash);
+                        const displayAmount = Number(expectedPayment.requiredAmount) / Math.pow(10, decimals);
+                        
+                        const transactionRecord: TransactionRecord = {
+                            id: `${txHash}-${Date.now()}`,
+                            amount: displayAmount,
+                            toAddress: merchantAddress,
+                            chainId,
+                            chainName,
+                            tokenSymbol: tokenSymbol,
+                            txHash,
+                            explorerUrl,
+                            status: 'confirmed',
+                            timestamp: Date.now()
+                        };
+                        
+                        transactionHistory.unshift(transactionRecord);
+                        
+                        if (transactionHistory.length > 500) {
+                            transactionHistory.splice(500);
+                        }
+                        
+                        clearTimeout(timeout);
+                        activePayments.delete(merchantAddress);
+                        broadcast({ 
+                            type: 'transaction_confirmed', 
+                            message: `Approved`,
+                            transactionHash: txHash,
+                            amount: displayAmount,
+                            chainName,
+                            chainId,
+                            transaction: transactionRecord
+                        });
+                    },
+                    // Error callback
+                    (error: string) => {
+                        console.error(`❌ Polling monitoring error: ${error}`);
+                        clearTimeout(timeout);
+                        activePayments.delete(merchantAddress);
+                        broadcast({ 
+                            type: 'payment_failure', 
+                            message: `Payment monitoring failed: ${error}`, 
+                            errorType: 'MONITORING_ERROR' 
+                        });
+                    }
+                );
+            }
         } else {
             // Fallback to legacy monitoring for backward compatibility
             console.log(`⚠️ Using legacy monitoring (no exact payment requirements)`);
