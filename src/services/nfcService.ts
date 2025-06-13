@@ -163,6 +163,9 @@ export class NFCService {
       let paymentSuccessful = false;
       
       try {
+        // Update UI to show loading tokens
+        broadcast({ type: 'status', message: 'Loading tokens...' });
+        
         // Fetch balances from Alchemy API across all supported chains
         const portfolio = await AlchemyService.fetchMultiChainBalances(ethAddress);
         

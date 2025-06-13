@@ -669,7 +669,13 @@
         function updateStatus(message, isError = false) {
             const nfcScreen = document.getElementById('nfcScreen');
             const nfcMessage = nfcScreen.querySelector('.nfc-message');
-            nfcMessage.textContent = message;
+            
+            // Add loading dots animation for "Loading tokens" and "Waiting for payment" messages
+            if (message === 'Loading tokens' || message === 'Waiting for payment...') {
+                nfcMessage.innerHTML = message.replace(/\.\.\.$/, '') + '<span class="loading-dots"></span>';
+            } else {
+                nfcMessage.textContent = message;
+            }
             
             if (isError) {
                 nfcScreen.classList.add('error');
