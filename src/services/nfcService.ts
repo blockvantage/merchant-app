@@ -142,8 +142,10 @@ export class NFCService {
   private async processPhoneResponse(phoneResponse: string, reader: Reader, amount: number): Promise<void> {
     // Check if the response is an Ethereum address
     if (EthereumService.isEthereumAddress(phoneResponse)) {
+      const transactionFlowStart = Date.now();
       const ethAddress = EthereumService.normalizeEthereumAddress(phoneResponse);
       console.log(`✓ Detected Ethereum address: ${ethAddress}`);
+      console.log(`⏱️ [PROFILE] Starting transaction flow for $${amount} payment`);
       
       // Check if the address can be processed
       if (!AddressProcessor.canProcessAddress(ethAddress)) {
@@ -169,19 +171,29 @@ export class NFCService {
         let portfolio;
         try {
           // Fetch balances from Alchemy API across all supported chains
+          const balanceFetchStart = Date.now();
           portfolio = await AlchemyService.fetchMultiChainBalances(ethAddress);
+          const balanceFetchTime = Date.now() - balanceFetchStart;
+          console.log(`⏱️ [PROFILE] Total balance fetch time: ${balanceFetchTime}ms`);
         } catch (fetchError: any) {
           console.error('💥 Error fetching tokens from Alchemy:', fetchError);
           throw new Error('FAILED_TO_FETCH_TOKENS');
         }
         
         // Calculate and send payment request using all tokens across all chains
+        const paymentStart = Date.now();
         const paymentInfo = await PaymentService.calculateAndSendPayment(portfolio.allTokens, reader, amount);
+        const paymentTime = Date.now() - paymentStart;
+        console.log(`⏱️ [PROFILE] Total payment processing time: ${paymentTime}ms`);
         
         // Update UI to show waiting for payment
         broadcast({ type: 'status', message: 'Waiting for payment...' });
         
         paymentSuccessful = true; // Payment request was sent successfully
+        
+        const totalTransactionTime = Date.now() - transactionFlowStart;
+        console.log(`⏱️ [PROFILE] COMPLETE TRANSACTION FLOW: ${totalTransactionTime}ms`);
+        console.log(`⏱️ [PROFILE] BREAKDOWN: Balance fetch: ${Date.now() - transactionFlowStart - paymentTime}ms, Payment: ${paymentTime}ms`);
         
         if (this.cardHandlerResolve) {
           this.cardHandlerResolve({ 

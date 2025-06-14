@@ -27,10 +27,14 @@ export class PriceService {
    * Get token prices from Alchemy for a specific chain using contract addresses
    */
   static async getTokenPricesForChain(tokenAddresses: string[], chainName: string): Promise<{[address: string]: number}> {
+    const startTime = Date.now();
+    
     try {
       if (tokenAddresses.length === 0) {
         return {};
       }
+      
+      console.log(`⏱️ [PROFILE] Starting price fetch for ${tokenAddresses.length} tokens on ${chainName}`);
       
       const chain = SUPPORTED_CHAINS.find(c => c.name === chainName);
       if (!chain) {
@@ -76,6 +80,9 @@ export class PriceService {
         }
       }
       
+      const duration = Date.now() - startTime;
+      console.log(`⏱️ [PROFILE] Price fetch for ${chainName} completed in ${duration}ms (${Object.keys(prices).length}/${tokenAddresses.length} prices found)`);
+      
       return prices;
     } catch (error) {
       console.log(`❌ Error fetching prices for ${chainName}:`, error);
@@ -87,7 +94,8 @@ export class PriceService {
    * Get token prices for multiple chains in parallel using Alchemy SDK
    */
   static async getMultiChainTokenPrices(chainTokens: {[chainName: string]: string[]}): Promise<{[chainName: string]: {[address: string]: number}}> {
-    console.log(`🔍 DEBUG: Starting getMultiChainTokenPrices for chains:`, Object.keys(chainTokens));
+    const startTime = Date.now();
+    console.log(`⏱️ [PROFILE] Starting getMultiChainTokenPrices for chains:`, Object.keys(chainTokens));
     
     const pricePromises = Object.entries(chainTokens).map(async ([chainName, addresses]) => {
       console.log(`🔍 DEBUG: Processing chain ${chainName} with ${addresses.length} addresses`);
@@ -103,7 +111,8 @@ export class PriceService {
       console.log(`🔍 DEBUG: Chain ${chainName} final result: ${Object.keys(prices).length} prices`);
     }
     
-    console.log(`✅ DEBUG: Multi-chain price fetch complete`);
+    const duration = Date.now() - startTime;
+    console.log(`⏱️ [PROFILE] Multi-chain price fetch completed in ${duration}ms`);
     return chainPrices;
   }
 

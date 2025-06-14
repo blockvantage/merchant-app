@@ -144,6 +144,9 @@ export class PaymentService {
     chainId: number;
     chainName: string;
   }> {
+    const startTime = Date.now();
+    console.log(`⏱️ [PROFILE] Starting calculateAndSendPayment for $${targetUSD} with ${tokensWithPrices.length} tokens`);
+    
     // Filter tokens that have sufficient balance for targetUSD payment
     const viableTokens = tokensWithPrices.filter(token => 
       token.priceUSD > 0 && token.valueUSD >= targetUSD
@@ -216,6 +219,8 @@ export class PaymentService {
 
     // Smart payment selection: prefer L2 stablecoins, then follow priority order
     const selectedToken = this.selectBestPaymentToken(viableTokens);
+    const selectionTime = Date.now() - startTime;
+    console.log(`⏱️ [PROFILE] Token selection and analysis completed in ${selectionTime}ms`);
     
     // Calculate exact amount in smallest units using BigInt arithmetic
     const targetUSDCents = Math.round(targetUSD * 1e8); // Convert to 8 decimal precision
@@ -235,10 +240,16 @@ export class PaymentService {
     console.log(`🔍 Payment will be monitored on: ${selectedToken.chainDisplayName}`);
     
     // Send payment request using the exact amount
+    const nfcTransmissionStart = Date.now();
     await this.sendPaymentRequest(reader, requiredAmount, selectedToken.address, selectedToken.decimals, selectedToken.chainId);
+    const nfcTransmissionTime = Date.now() - nfcTransmissionStart;
+    console.log(`⏱️ [PROFILE] NFC payment request transmission completed in ${nfcTransmissionTime}ms`);
     
     console.log(`✅ Payment request sent for exactly ${requiredAmount.toString()} smallest units`);
     console.log(`📱 Customer will be asked to pay ${displayAmount} ${selectedToken.symbol}`);
+    
+    const totalTime = Date.now() - startTime;
+    console.log(`⏱️ [PROFILE] calculateAndSendPayment completed in ${totalTime}ms`);
     
     // Return information needed for monitoring
     return {

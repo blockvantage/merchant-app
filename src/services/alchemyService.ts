@@ -108,6 +108,9 @@ export class AlchemyService {
    * Fetch all balances across all supported chains in parallel
    */
   static async fetchMultiChainBalances(address: string): Promise<MultiChainPortfolio> {
+    const startTime = Date.now();
+    console.log(`⏱️ [PROFILE] Starting fetchMultiChainBalances for ${address}`);
+    
     if (!this.isInitialized) this.initialize();
 
     try {
@@ -119,6 +122,8 @@ export class AlchemyService {
       );
 
       const chainBalances = await Promise.all(chainBalancePromises);
+      const fetchTime = Date.now() - startTime;
+      console.log(`⏱️ [PROFILE] Chain balance fetching completed in ${fetchTime}ms`);
 
       // Aggregate results
       const portfolio: MultiChainPortfolio = {
@@ -130,6 +135,9 @@ export class AlchemyService {
 
       // Display summary
       this.displayPortfolioSummary(portfolio);
+
+      const totalTime = Date.now() - startTime;
+      console.log(`⏱️ [PROFILE] fetchMultiChainBalances completed in ${totalTime}ms`);
 
       return portfolio;
 
@@ -148,6 +156,8 @@ export class AlchemyService {
    * Fetch balances for a single chain
    */
   private static async fetchChainBalances(address: string, chain: ChainConfig): Promise<ChainBalances> {
+    const startTime = Date.now();
+    
     try {
       console.log(`⛓️  Fetching ${chain.displayName} balances...`);
 
@@ -169,7 +179,8 @@ export class AlchemyService {
 
       const totalValueUSD = tokens.reduce((sum, token) => sum + token.valueUSD, 0);
 
-      console.log(`✅ ${chain.displayName}: ${tokens.length} tokens, $${totalValueUSD.toFixed(2)}`);
+      const duration = Date.now() - startTime;
+      console.log(`✅ ${chain.displayName}: ${tokens.length} tokens, $${totalValueUSD.toFixed(2)} (${duration}ms)`);
 
       return {
         chainId: chain.id,
