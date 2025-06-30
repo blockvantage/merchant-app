@@ -53,21 +53,16 @@ BLOCKCHAIN_NETWORKS="ethereum,base,arbitrum,optimism,polygon,starknet"
 
 ### 4. Build the Image
 
-**For macOS (Recommended - Simple):**
-```bash
-# Creates base image + manual completion guide (takes 5-10 minutes)
-./build-pi-image-simple.sh
-# Then follow the generated manual completion guide
-./complete-build-manual.sh
-```
-
-**For macOS (Advanced - Docker):**
+**For macOS:**
 ```bash
 # Uses Docker for full automation (takes 30-60 minutes, may have issues)
-./build-pi-image-docker.sh
+./build-pi-image-osx.sh
 ```
 
 **For Linux:**
+
+*Currently Untested, following macOS instructions may work better*
+
 ```bash
 # Direct build (fastest, full automation)
 ./build-pi-image.sh
@@ -80,20 +75,6 @@ BLOCKCHAIN_NETWORKS="ethereum,base,arbitrum,optimism,polygon,starknet"
 # Flash the created image to SD card using Raspberry Pi Imager
 # File will be named: nfc-terminal-YYYYMMDD.img.gz
 ```
-
-## 🔧 macOS Compatibility
-
-### The Issue
-The original build script failed on macOS because:
-- macOS `fdisk` has different syntax than Linux `fdisk`
-- macOS doesn't support mounting ext2/ext4 filesystems natively
-- Image manipulation requires Linux-specific tools
-
-### The Solution
-The Docker-based build script (`build-pi-image-docker.sh`) solves this by:
-- Running the build process inside an Ubuntu container
-- Using Linux tools for filesystem operations
-- Maintaining full compatibility with the build process
 
 ### Requirements for macOS Build
 1. **Docker Desktop** - Install from https://docker.com/products/docker-desktop
@@ -185,10 +166,6 @@ When you power on the Pi with the flashed SD card:
 **"MERCHANT_ETH_ADDRESS is still set to default value!"**
 - Edit `build-config.env` and set your actual Ethereum address
 - Address must be 42 characters starting with `0x`
-
-**"fdisk: illegal option -- l" (macOS)**
-- Use the Docker build script: `./build-pi-image-docker.sh`
-- Install Docker Desktop if not already installed
 
 **"Docker not found"**
 - Install Docker Desktop from https://docker.com/products/docker-desktop
