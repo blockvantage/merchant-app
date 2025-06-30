@@ -584,53 +584,10 @@ async function startServerAndApp() {
     }
 }
 
-// Handle graceful shutdown for the server and app services
+// Handle immediate shutdown
 function shutdown(signal: string) {
-    console.log(`\n👋 Received ${signal}. Shutting down gracefully...`);
-    
-    // Clear all payment monitoring timeouts
-    activePayments.forEach((session) => {
-        clearTimeout(session.timeout);
-    });
-    activePayments.clear();
-    
-    // Cleanup all active Alchemy subscriptions
-    try {
-        AlchemyService.cleanup();
-    } catch (error) {
-        console.error('Error cleaning up Alchemy subscriptions:', error);
-    }
-
-    // Stop connection monitoring
-    try {
-        ConnectionMonitorService.stopMonitoring();
-    } catch (error) {
-        console.error('Error stopping connection monitoring:', error);
-    }
-    
-    // Close WebSocket clients first
-    wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.terminate();
-        }
-    });
-    wss.close(() => {
-        console.log('🔌 WebSocket server closed.');
-    });
-
-    server.close((err) => {
-        if (err) {
-            console.error('Error closing HTTP server:', err);
-        }
-        console.log('🛑 HTTP server closed.');
-        nfcApp.stopServices();
-        process.exit(err ? 1 : 0);
-    });
-
-    setTimeout(() => {
-        console.error('Timeout: Could not close connections gracefully. Forcefully shutting down.');
-        process.exit(1);
-    }, 10000);
+    console.log(`\n👋 Received ${signal}. Shutting down immediately.`);
+    process.exit(0);
 }
 
 process.on('SIGINT', () => shutdown('SIGINT'));

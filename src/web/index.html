@@ -626,7 +626,7 @@
                         if (data.errorType === 'PHONE_MOVED_TOO_QUICKLY') {
                             showPhoneMovedTooQuickly();
                         } else if (data.errorType === 'TOKEN_FETCH_ERROR') {
-                            showError(data.message); // Shows "Failed to fetch tokens"
+                            showTokenFetchError(); // Show dedicated error screen
                         } else {
                             showError(data.message);
                         }
@@ -672,12 +672,8 @@
             const nfcScreen = document.getElementById('nfcScreen');
             const nfcMessage = nfcScreen.querySelector('.nfc-message');
             
-            // Add loading dots animation for "Loading tokens" and "Waiting for payment" messages
-            if (message === 'Loading tokens' || message === 'Waiting for payment...') {
-                nfcMessage.innerHTML = message.replace(/\.\.\.$/, '') + '<span class="loading-dots"></span>';
-            } else {
-                nfcMessage.textContent = message;
-            }
+            // Remove the loading dots - spinner is enough to indicate loading
+            nfcMessage.textContent = message.replace(/\.\.\.$/, '');
             
             if (isError) {
                 nfcScreen.classList.add('error');
@@ -1128,6 +1124,41 @@
                 
                 console.log('Returned to waiting state after phone moved too quickly');
             }, 2000);
+        }
+
+        function showTokenFetchError() {
+            const nfcScreen = document.getElementById('nfcScreen');
+            const nfcMessage = nfcScreen.querySelector('.nfc-message');
+            const nfcSubmessage = nfcScreen.querySelector('.nfc-submessage');
+            const spinner = nfcScreen.querySelector('.spinner');
+            const checkmark = nfcScreen.querySelector('.checkmark');
+            const cancelButton = nfcScreen.querySelector('.cancel-button');
+            const nfcAmount = nfcScreen.querySelector('.nfc-amount');
+            
+            // Show token fetch error state
+            nfcScreen.style.display = 'flex';
+            nfcScreen.classList.add('error');
+            nfcScreen.classList.remove('waiting-payment', 'payment-approved');
+            
+            nfcMessage.textContent = 'Failed to Load Tokens';
+            nfcSubmessage.innerHTML = 'Unable to connect to blockchain services<br>Please check your internet connection and try again';
+            nfcSubmessage.style.display = 'block';
+            nfcAmount.style.display = 'none';
+            spinner.style.display = 'none';
+            checkmark.style.display = 'none';
+            cancelButton.style.display = 'none';
+            
+            // Clear any timeouts
+            if (paymentTimeout) {
+                clearTimeout(paymentTimeout);
+                paymentTimeout = null;
+            }
+            
+            // Return to main screen after 5 seconds
+            setTimeout(() => {
+                nfcScreen.style.display = 'none';
+                resetUI();
+            }, 5000);
         }
     </script>
 </body>

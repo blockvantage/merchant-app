@@ -89,11 +89,14 @@ export class RealtimeTransactionMonitor {
       throw new Error(`No WebSocket URL available for chain ${chainId}`);
     }
 
+    console.log(`🔌 [WS DEBUG] Attempting to connect to: ${wsUrl}`);
+
     return new Promise((resolve, reject) => {
       this.wsConnection = new WebSocket(wsUrl);
 
       this.wsConnection.on('open', () => {
-        console.log(`🔌 WebSocket connected to Alchemy`);
+        console.log(`🔌 [WS DEBUG] WebSocket CONNECTED successfully to Alchemy`);
+        console.log(`🔌 [WS DEBUG] Connection state: ${this.wsConnection?.readyState} (1=OPEN)`);
         this.reconnectAttempts = 0;
         
         // Subscribe to pending transactions to our recipient address
@@ -110,37 +113,52 @@ export class RealtimeTransactionMonitor {
           const message = JSON.parse(data.toString());
           this.handleWebSocketMessage(message);
         } catch (error) {
-          console.error('Error parsing WebSocket message:', error);
+          console.error('❌ [WS DEBUG] Error parsing WebSocket message:', error);
+          console.error('❌ [WS DEBUG] Raw data:', data.toString());
         }
       });
 
       this.wsConnection.on('error', (error) => {
-        console.error('WebSocket error:', error);
+        console.error('❌ [WS DEBUG] WebSocket ERROR:', error);
+        console.error('❌ [WS DEBUG] Error details:', {
+          message: error.message,
+          code: (error as any).code,
+          type: (error as any).type
+        });
         reject(error);
       });
 
-      this.wsConnection.on('close', () => {
-        console.log('🔌 WebSocket connection closed');
+      this.wsConnection.on('close', (code, reason) => {
+        console.log(`🔌 [WS DEBUG] WebSocket connection CLOSED`);
+        console.log(`🔌 [WS DEBUG] Close code: ${code}, reason: ${reason}`);
+        console.log(`🔌 [WS DEBUG] Active session exists: ${!!this.currentSession}`);
+        console.log(`🔌 [WS DEBUG] Reconnect attempts: ${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS}`);
         this.wsConnection = null;
         
         // Only attempt reconnection if we have an active session
         if (this.currentSession && this.reconnectAttempts < this.MAX_RECONNECT_ATTEMPTS) {
+          console.log(`🔄 [WS DEBUG] Scheduling reconnection in ${this.RECONNECT_DELAY}ms`);
           setTimeout(() => {
             this.reconnectAttempts++;
-            console.log(`🔄 Attempting WebSocket reconnection (${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS})`);
-            this.connectWebSocket(this.currentSession!.chainId).catch(() => {
+            console.log(`🔄 [WS DEBUG] Attempting WebSocket reconnection (${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS})`);
+            this.connectWebSocket(this.currentSession!.chainId).catch((reconnectError) => {
+              console.error(`❌ [WS DEBUG] Reconnection attempt ${this.reconnectAttempts} failed:`, reconnectError);
               if (this.reconnectAttempts >= this.MAX_RECONNECT_ATTEMPTS) {
-                console.warn('⚠️  Max reconnection attempts reached, falling back to polling');
+                console.warn('⚠️ [WS DEBUG] Max reconnection attempts reached, falling back to polling');
                 this.startFallbackPolling();
               }
             });
           }, this.RECONNECT_DELAY);
+        } else {
+          console.log(`🛑 [WS DEBUG] Not attempting reconnection (session: ${!!this.currentSession}, attempts: ${this.reconnectAttempts})`);
         }
       });
 
       // Set connection timeout
       setTimeout(() => {
         if (this.wsConnection?.readyState !== WebSocket.OPEN) {
+          console.error(`⏰ [WS DEBUG] WebSocket connection timeout after 10 seconds`);
+          console.error(`⏰ [WS DEBUG] Connection state: ${this.wsConnection?.readyState}`);
           this.wsConnection?.close();
           reject(new Error('WebSocket connection timeout'));
         }
@@ -152,9 +170,13 @@ export class RealtimeTransactionMonitor {
    * Subscribe to pending transactions filtered by recipient address
    */
   private static subscribeToPendingTransactions(): void {
-    if (!this.wsConnection || !this.currentSession) return;
+    if (!this.wsConnection || !this.currentSession) {
+      console.error(`❌ [WS DEBUG] Cannot subscribe - wsConnection: ${!!this.wsConnection}, currentSession: ${!!this.currentSession}`);
+      return;
+    }
 
-    const subscription = {
+    // First subscription: alchemy_pendingTransactions (mainly for ETH transfers)
+    const pendingTxSubscription = {
       jsonrpc: "2.0",
       id: 1,
       method: "alchemy_pendingTransactions",
@@ -164,15 +186,29 @@ export class RealtimeTransactionMonitor {
       }]
     };
 
-    console.log(`📡 Subscribing to pending transactions for ${this.currentSession.recipientAddress}`);
-    this.wsConnection.send(JSON.stringify(subscription));
+    console.log(`📡 [WS DEBUG] Subscribing to pending transactions for ${this.currentSession.recipientAddress}`);
+    console.log(`📡 [WS DEBUG] Subscription payload:`, JSON.stringify(pendingTxSubscription, null, 2));
+    
+    try {
+      this.wsConnection.send(JSON.stringify(pendingTxSubscription));
+      console.log(`✅ [WS DEBUG] Pending transaction subscription sent successfully`);
+    } catch (error) {
+      console.error(`❌ [WS DEBUG] Failed to send pending transaction subscription:`, error);
+    }
+
+    // For ERC-20 tokens, we'll rely on checking blocks when they arrive
+    // because ERC-20 transfers have the token contract as 'to' address, not the recipient
+    console.log(`📡 [WS DEBUG] Note: ERC-20 transfers will be detected when new blocks arrive`);
   }
 
   /**
    * Subscribe to new blocks for confirmation monitoring
    */
   private static subscribeToNewBlocks(): void {
-    if (!this.wsConnection) return;
+    if (!this.wsConnection) {
+      console.error(`❌ [WS DEBUG] Cannot subscribe to new blocks - no WebSocket connection`);
+      return;
+    }
 
     const subscription = {
       jsonrpc: "2.0",
@@ -181,34 +217,142 @@ export class RealtimeTransactionMonitor {
       params: ["newHeads"]
     };
 
-    console.log(`📡 Subscribing to new blocks for confirmation tracking`);
-    this.wsConnection.send(JSON.stringify(subscription));
+    console.log(`📡 [WS DEBUG] Subscribing to new blocks for confirmation tracking`);
+    console.log(`📡 [WS DEBUG] Block subscription payload:`, JSON.stringify(subscription, null, 2));
+    
+    try {
+      this.wsConnection.send(JSON.stringify(subscription));
+      console.log(`✅ [WS DEBUG] New blocks subscription sent successfully`);
+    } catch (error) {
+      console.error(`❌ [WS DEBUG] Failed to send new blocks subscription:`, error);
+    }
   }
 
   /**
    * Handle incoming WebSocket messages
    */
   private static handleWebSocketMessage(message: any): void {
-    if (!this.currentSession) return;
+    console.log(`🔍 [WS DEBUG] Processing WebSocket message - type: ${message.method || 'response'}`);
+    
+    if (!this.currentSession) {
+      console.warn(`⚠️ [WS DEBUG] Received message but no active session - ignoring`);
+      return;
+    }
 
     // Handle subscription confirmations
     if (message.id && message.result) {
-      console.log(`✅ Subscription confirmed: ${message.result}`);
+      console.log(`✅ [WS DEBUG] Subscription confirmed for ID ${message.id}: ${message.result}`);
+      
+      // Log what this subscription is for
+      if (message.id === 1) {
+        console.log(`✅ [WS DEBUG] Pending transactions subscription active`);
+      } else if (message.id === 2) {
+        console.log(`✅ [WS DEBUG] New blocks subscription active`);
+      }
+      return;
+    }
+
+    // Handle subscription errors
+    if (message.id && message.error) {
+      console.error(`❌ [WS DEBUG] Subscription error for ID ${message.id}:`, message.error);
       return;
     }
 
     // Handle pending transaction notifications
     if (message.method === "alchemy_pendingTransactions" && message.params?.result) {
       const tx: PendingTransaction = message.params.result;
-      console.log(`📥 PENDING TRANSACTION DETECTED: ${tx.hash}`);
+      console.log(`📥 [WS DEBUG] PENDING TRANSACTION DETECTED: ${tx.hash}`);
+      console.log(`📥 [WS DEBUG] Transaction details:`, {
+        hash: tx.hash,
+        to: tx.to,
+        value: tx.value,
+        input: tx.input?.substring(0, 20) + '...' // Truncate input for readability
+      });
+      console.log(`📥 [WS DEBUG] Expected recipient: ${this.currentSession.recipientAddress}`);
+      console.log(`📥 [WS DEBUG] Expected token: ${this.currentSession.tokenSymbol} (${this.currentSession.tokenAddress})`);
+      console.log(`📥 [WS DEBUG] Expected amount: ${this.currentSession.expectedAmount.toString()}`);
+      
       this.processPendingTransaction(tx);
+      return;
     }
 
-    // Handle new block notifications (for confirmation tracking)
+    // Handle new block notifications - check for transfers in the new block
     if (message.method === "eth_subscription" && message.params?.result?.number) {
       const blockNumber = parseInt(message.params.result.number, 16);
-      console.log(`🧱 New block: ${blockNumber}`);
-      // Could be used for transaction confirmation logic
+      console.log(`🧱 [WS DEBUG] New block: ${blockNumber}`);
+      console.log(`🧱 [WS DEBUG] Checking for transfers in block ${blockNumber}`);
+      
+      // Check for transfers in this new block
+      this.checkBlockForTransfers(blockNumber);
+      return;
+    }
+
+    // Handle unrecognized messages
+    console.warn(`⚠️ [WS DEBUG] Unrecognized message format:`, {
+      method: message.method,
+      hasId: !!message.id,
+      hasResult: !!message.result,
+      hasError: !!message.error,
+      hasParams: !!message.params
+    });
+  }
+
+  /**
+   * Check a specific block for transfers to our merchant address
+   */
+  private static async checkBlockForTransfers(blockNumber: number): Promise<void> {
+    if (!this.currentSession) {
+      console.log(`❌ [WS DEBUG] No active session for block checking`);
+      return;
+    }
+
+    const alchemy = this.getAlchemyClient(this.currentSession.chainId);
+    if (!alchemy) {
+      console.log(`❌ [WS DEBUG] No Alchemy client for block checking`);
+      return;
+    }
+
+    // Add a delay to let the block be fully processed
+    console.log(`⏳ [WS DEBUG] Waiting 2 seconds for block ${blockNumber} to be fully processed...`);
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    try {
+      console.log(`🔍 [WS DEBUG] Fetching transfers in block ${blockNumber} to ${this.currentSession.recipientAddress}`);
+      
+      // Use a safer approach - check from 2 blocks ago up to this block
+      const safeFromBlock = Math.max(0, blockNumber - 1);
+      
+      const transfers = await alchemy.core.getAssetTransfers({
+        toAddress: this.currentSession.recipientAddress,
+        fromBlock: Utils.hexlify(safeFromBlock),
+        toBlock: Utils.hexlify(blockNumber), // Check up to the previous block to avoid "past head" errors
+        category: [AssetTransfersCategory.EXTERNAL, AssetTransfersCategory.ERC20],
+        withMetadata: true
+      });
+
+      console.log(`🔍 [WS DEBUG] Found ${transfers.transfers.length} transfers in blocks ${safeFromBlock}-${blockNumber - 1}`);
+      
+      // Process each transfer
+      for (const transfer of transfers.transfers) {
+        console.log(`📥 [WS DEBUG] Transfer found:`, {
+          hash: transfer.hash,
+          from: transfer.from,
+          to: transfer.to,
+          value: transfer.value,
+          asset: transfer.asset,
+          tokenAddress: transfer.rawContract?.address || 'ETH',
+          blockNum: transfer.blockNum
+        });
+        
+        await this.processAssetTransfer(transfer);
+      }
+    } catch (error: any) {
+      // If we still get "past head" error, it means we're too close to the chain tip
+      if (error.message?.includes('past head')) {
+        console.log(`⏳ [WS DEBUG] Block ${blockNumber} still too new, will be caught in next block`);
+      } else {
+        console.error(`❌ [WS DEBUG] Error checking blocks for transfers:`, error);
+      }
     }
   }
 
@@ -387,17 +531,28 @@ export class RealtimeTransactionMonitor {
    * Start fallback polling if WebSocket fails
    */
   private static startFallbackPolling(): void {
-    if (this.fallbackInterval) return;
+    if (this.fallbackInterval) {
+      console.log(`🔄 [WS DEBUG] Fallback polling already active`);
+      return;
+    }
 
-    console.log(`🔄 Starting fallback polling every ${this.FALLBACK_POLLING_INTERVAL}ms`);
+    console.log(`🔄 [WS DEBUG] Starting fallback polling every ${this.FALLBACK_POLLING_INTERVAL}ms`);
+    console.log(`🔄 [WS DEBUG] WebSocket has failed, using API polling as backup`);
     
     this.fallbackInterval = setInterval(async () => {
-      if (!this.currentSession) return;
+      if (!this.currentSession) {
+        console.log(`🛑 [WS DEBUG] No active session during fallback polling - stopping`);
+        return;
+      }
 
       const alchemy = this.getAlchemyClient(this.currentSession.chainId);
-      if (!alchemy) return;
+      if (!alchemy) {
+        console.error(`❌ [WS DEBUG] No Alchemy client available for fallback polling`);
+        return;
+      }
 
       try {
+        console.log(`🔄 [WS DEBUG] Polling for transactions to ${this.currentSession.recipientAddress}`);
         const transfers = await alchemy.core.getAssetTransfers({
           toAddress: this.currentSession.recipientAddress,
           category: [AssetTransfersCategory.EXTERNAL, AssetTransfersCategory.ERC20],
@@ -405,11 +560,12 @@ export class RealtimeTransactionMonitor {
           maxCount: 10
         });
 
+        console.log(`🔄 [WS DEBUG] Found ${transfers.transfers.length} recent transfers in polling`);
         for (const transfer of transfers.transfers) {
           await this.processAssetTransfer(transfer);
         }
       } catch (error) {
-        console.error('Error during fallback polling:', error);
+        console.error('❌ [WS DEBUG] Error during fallback polling:', error);
       }
     }, this.FALLBACK_POLLING_INTERVAL);
   }
@@ -418,14 +574,17 @@ export class RealtimeTransactionMonitor {
    * Stop all monitoring (WebSocket and fallback polling)
    */
   static stopMonitoring(): void {
-    console.log('\n🛑 Stopping real-time payment monitoring...');
+    console.log('\n🛑 [WS DEBUG] Stopping real-time payment monitoring...');
+    console.log(`🛑 [WS DEBUG] Current state - WS: ${!!this.wsConnection}, Polling: ${!!this.fallbackInterval}, Session: ${!!this.currentSession}`);
     
     if (this.wsConnection) {
+      console.log(`🛑 [WS DEBUG] Closing WebSocket connection (state: ${this.wsConnection.readyState})`);
       this.wsConnection.close();
       this.wsConnection = null;
     }
     
     if (this.fallbackInterval) {
+      console.log(`🛑 [WS DEBUG] Stopping fallback polling interval`);
       clearInterval(this.fallbackInterval);
       this.fallbackInterval = null;
     }
@@ -433,7 +592,7 @@ export class RealtimeTransactionMonitor {
     this.currentSession = null;
     this.reconnectAttempts = 0;
     
-    console.log('✅ Real-time monitoring stopped');
+    console.log('✅ [WS DEBUG] Real-time monitoring stopped completely');
   }
 
   /**
