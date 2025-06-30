@@ -50,7 +50,7 @@ L2 Stablecoin > L2 Other > L2 ETH > L1 Stablecoin > L1 Other > L1 ETH
 
 3. **Run the terminal:**
    ```bash
-   npm run dev
+   npm start
    ```
 
 4. **Open the interface:**
@@ -160,9 +160,9 @@ cp build-config.env.template build-config.env
 # Edit build-config.env with your WiFi, API key, and merchant address
 
 # Build bootable image (macOS)
-./build-pi-image-docker.sh
+./build-pi-image-osx.sh
 
-# Flash the generated .img.gz file to SD card and boot!
+# Flash the generated nfc-terminal-<date>.img.gz file to SD card using Raspberry Pi Imager and boot!
 ```
 
 📖 **[Complete Deployment Guide](README-DEPLOYMENT.md)**
