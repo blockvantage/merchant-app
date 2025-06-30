@@ -1,40 +1,22 @@
 # NFC Payment Terminal
 
-A multi-chain NFC payment terminal that processes cryptocurrency payments across 6 blockchain networks with real-time transaction monitoring and comprehensive history tracking.
+A multi-chain NFC payment terminal that processes cryptocurrency payments across 5 blockchain networks with real-time transaction monitoring and comprehensive history tracking.
 
 ## 🌐 Supported Networks
 
-- **Ethereum** (ETH)
-- **Base** (ETH) 
-- **Arbitrum** (ETH)
-- **Optimism** (ETH)
-- **Polygon** (MATIC)
-- **Starknet** (ETH)
-
-## ✨ Key Features
-
-### 💳 **Multi-Chain Payments**
-- Smart payment selection with L2 stablecoin priority
-- EIP-681 payment URIs with chain ID support
-- Real-time transaction monitoring via Alchemy WebSockets
-- Automatic payment confirmation with block explorer links
-
-### 📊 **Transaction History**
-- Comprehensive transaction logging with status tracking
-- NFC wallet scanning for personalized transaction history
-- Filter transactions by wallet address or view all transactions
-- Clickable block explorer links for transaction verification
+- **Ethereum**
+- **Base** 
+- **Arbitrum** 
+- **Optimism** 
+- **Polygon** 
 
 ### 🎯 **Smart Payment Priority**
+
+Rather than negotiate a chain / token combo with the merchant, the payment terminal handles it automatically. First it figures out a chain the merchant supports that you also have funds on, then sends a transaction with ETH or an ERC-20 token with this priority:
+
 ```
 L2 Stablecoin > L2 Other > L2 ETH > L1 Stablecoin > L1 Other > L1 ETH
 ```
-
-### 🖥️ **Web Interface**
-- Touch-friendly payment input (cents-based for precision)
-- Real-time payment status updates via WebSocket
-- Transaction history browser with wallet filtering
-- Clean, mobile-optimized UI
 
 ## 🚀 Quick Start
 
@@ -70,6 +52,10 @@ src/
     ├── paymentService.ts      # Payment selection & EIP-681 generation
     ├── ethereumService.ts     # Address validation utilities
     └── addressProcessor.ts    # Duplicate processing prevention
+scripts/
+└── rpi-deploy/
+    ├── setup-build-environment.sh  # Install dependencies to allow building a Raspberry Pi image
+    └── build-pi-image-osx.sh       # Build a Raspberry Pi image
 ```
 
 ## 💡 Usage
@@ -87,18 +73,6 @@ src/
 3. Tap "📱 Scan Wallet for History" and have customer tap their device
 4. Browse filtered transactions for that specific wallet
 
-### **Staff Support Features**
-- Transaction history helps resolve customer payment issues
-- Block explorer links provide transaction proof
-- Wallet-specific filtering shows customer's payment history
-- Real-time status updates for payment troubleshooting
-
-## ⚙️ Configuration
-
-Update `src/config/index.ts` to customize:
-- **SUPPORTED_CHAINS**: Blockchain networks
-- **TARGET_USD**: Default payment amounts
-- **Chain configurations**: RPC URLs, block explorers, token mappings
 
 ## 🔄 Payment Flow
 
@@ -112,26 +86,10 @@ Update `src/config/index.ts` to customize:
 ## 🛡️ Transaction Monitoring
 
 - **WebSocket monitoring** for Ethereum, Base, Arbitrum, Optimism, Polygon
-- **Polling-based monitoring** for Starknet (5-second intervals)
+- **Polling-based monitoring** fallback
 - **Automatic timeout** after 5 minutes
 - **Block explorer integration** for transaction verification
 - **Status tracking**: detected → confirmed → failed
-
-## 📱 Example Terminal Output
-
-```
-💸 Payment initiated for $15.50 from Web UI
-✅ Payment request sent successfully on Base (Chain ID: 8453)
-🔍 Monitoring started for Base payment of $15.50
-📝 Transaction detected: 0xabc123... (0.0045 ETH ≥ $15.50 required)
-✅ Payment confirmed! View: https://basescan.org/tx/0xabc123...
-```
-
-## 🔍 Debug Endpoints
-
-- **GET** `/debug/chains` - View supported chains and active subscriptions
-- **GET** `/transaction-history` - Retrieve all transaction history
-- **POST** `/scan-wallet` - Initiate wallet scanning for history filtering
 
 ## 🍓 Raspberry Pi Deployment
 
@@ -166,12 +124,3 @@ cp build-config.env.template build-config.env
 ```
 
 📖 **[Complete Deployment Guide](README-DEPLOYMENT.md)**
-
-## 🎯 Business Benefits
-
-- **Reduced Support Calls**: Staff can instantly view customer transaction history
-- **Payment Verification**: Block explorer links provide transaction proof  
-- **Customer Experience**: Fast L2 payments with immediate confirmation
-- **Multi-Chain Flexibility**: Accepts payments on 6 different blockchain networks
-- **Audit Trail**: Comprehensive transaction logging for accounting
-- **Production Ready**: Deploy as dedicated payment kiosk with Raspberry Pi
