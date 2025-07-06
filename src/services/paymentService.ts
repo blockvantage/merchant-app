@@ -1,5 +1,5 @@
 import { Reader } from 'nfc-pcsc';
-import { PAYMENT, RECIPIENT_ADDRESS, SUPPORTED_CHAINS } from '../config/index.js';
+import { RECIPIENT_ADDRESS, SUPPORTED_CHAINS } from '../config/index.js';
 import { TokenWithPrice } from '../types/index.js';
 import { EthereumService } from './ethereumService.js';
 
@@ -32,9 +32,10 @@ export class PaymentService {
     }
   }
 
+
   /**
-   * Create NDEF URI record for the EIP-681 payment request
-   * This formats the URI so Android will automatically open it with wallet apps
+   * Create NDEF URI record for any URI
+   * This formats the URI so Android will automatically open it with appropriate apps
    */
   static createNDEFUriRecord(uri: string): Buffer {
     // NDEF URI Record structure:
@@ -87,35 +88,24 @@ export class PaymentService {
       console.log(`\n💳 Sending EIP-681 payment request for ${chainName} (Chain ID: ${chainId}):`);
       console.log(`📄 URI: ${eip681Uri}`);
       
-      // Create NDEF URI record instead of raw string
+      // Create NDEF URI record
       const ndefMessage = this.createNDEFUriRecord(eip681Uri);
       
       console.log(`📡 NDEF Message (${ndefMessage.length} bytes): ${ndefMessage.toString('hex')}`);
       
-      // Create the complete APDU: PAYMENT command + length + NDEF data
-      const completeApdu = Buffer.concat([
-        PAYMENT.slice(0, 4),           // Command (80CF0000) 
-        Buffer.from([ndefMessage.length]), // Length of NDEF data
-        ndefMessage                    // NDEF formatted payment request
-      ]);
-      
-      console.log(`📡 Sending APDU with NDEF length: ${completeApdu.toString('hex')}`);
-      console.log(`📡 APDU breakdown: Command=${PAYMENT.slice(0,4).toString('hex')} Length=${ndefMessage.length.toString(16).padStart(2,'0')} Data=${ndefMessage.toString('hex')}`);
-      
-      // Send the complete APDU with the NDEF payment request
+      // Send the NDEF formatted URI
       // @ts-expect-error Argument of type '{}' is not assignable to parameter of type 'never'.
-      const response = await reader.transmit(completeApdu, Math.max(256, ndefMessage.length + 10), {});
-      const sw = response.readUInt16BE(response.length - 2);
+      const response = await reader.transmit(ndefMessage, 256, {});
       
-      if (sw === 0x9000) {
+      if (response && response.length > 0) {
         console.log(`✅ NDEF payment request sent successfully for ${chainName}!`);
         console.log('📱 Wallet app should now open with transaction details...');
-        const phoneResponse = response.slice(0, -2).toString();
+        const phoneResponse = response.toString();
         if (phoneResponse) {
           console.log(`📱 Phone response: ${phoneResponse}`);
         }
       } else {
-        console.log(`❌ Payment request failed with status: ${sw.toString(16)}`);
+        console.log(`❌ No response received from device`);
       }
     } catch (error: any) {
       console.error('Error sending payment request:', error);
