@@ -5,6 +5,7 @@ import { EthereumService } from './ethereumService.js';
 import { AddressProcessor } from './addressProcessor.js';
 import { AlchemyService } from './alchemyService.js';
 import { PaymentService } from './paymentService.js';
+import { CAIP10Service } from './caip10Service.js';
 import { broadcast } from '../server.js';
 
 /**
@@ -116,9 +117,20 @@ export class NFCService {
       const phoneResponse = resp.toString();
       console.log('📱 Phone says →', phoneResponse);
       
-      // Check if this is an Ethereum address so we can track it for cleanup
-      if (EthereumService.isEthereumAddress(phoneResponse)) {
-        processedAddress = EthereumService.normalizeEthereumAddress(phoneResponse);
+      // Check if this is a CAIP-10 address or regular Ethereum address
+      let ethAddress: string | null = null;
+      
+      if (CAIP10Service.isCAIP10Address(phoneResponse)) {
+        // Extract Ethereum address from CAIP-10 format
+        ethAddress = CAIP10Service.extractEthereumAddress(phoneResponse);
+        if (ethAddress) {
+          console.log(`✓ Extracted Ethereum address from CAIP-10: ${ethAddress}`);
+          processedAddress = ethAddress;
+        }
+      } else if (EthereumService.isEthereumAddress(phoneResponse)) {
+        // Handle legacy plain Ethereum address format
+        ethAddress = EthereumService.normalizeEthereumAddress(phoneResponse);
+        processedAddress = ethAddress;
       }
       
       if (this.walletScanArmed) {
@@ -147,11 +159,25 @@ export class NFCService {
    * Process the response from the phone
    */
   private async processPhoneResponse(phoneResponse: string, reader: Reader, amount: number): Promise<void> {
-    // Check if the response is an Ethereum address
-    if (EthereumService.isEthereumAddress(phoneResponse)) {
-      const transactionFlowStart = Date.now();
-      const ethAddress = EthereumService.normalizeEthereumAddress(phoneResponse);
+    let ethAddress: string | null = null;
+    let chainId: number = 1; // Default to Ethereum mainnet
+    
+    // Check if this is a CAIP-10 address or regular Ethereum address
+    if (CAIP10Service.isCAIP10Address(phoneResponse)) {
+      const parsed = CAIP10Service.parseCAIP10Address(phoneResponse);
+      if (parsed && parsed.namespace === 'eip155') {
+        ethAddress = CAIP10Service.extractEthereumAddress(phoneResponse);
+        chainId = parsed.chainId || 1;
+        console.log(`✓ Detected CAIP-10 Ethereum address: ${ethAddress} on chain ${chainId}`);
+      }
+    } else if (EthereumService.isEthereumAddress(phoneResponse)) {
+      // Handle legacy plain Ethereum address format
+      ethAddress = EthereumService.normalizeEthereumAddress(phoneResponse);
       console.log(`✓ Detected Ethereum address: ${ethAddress}`);
+    }
+    
+    if (ethAddress) {
+      const transactionFlowStart = Date.now();
       console.log(`⏱️ [PROFILE] Starting transaction flow for $${amount} payment`);
       
       // Check if the address can be processed
@@ -256,12 +282,14 @@ export class NFCService {
         console.log(`🏁 Finishing processing for address: ${ethAddress} (successful: ${paymentSuccessful})`);
         
         // No more cooldown - just finish processing for all cases
-        AddressProcessor.finishProcessing(ethAddress);
+        if (ethAddress) {
+          AddressProcessor.finishProcessing(ethAddress);
+        }
       }
     } else {
-      console.log('📱 Response is not an Ethereum address');
+      console.log('📱 Response is not a valid Ethereum address');
       if (this.cardHandlerResolve) {
-        this.cardHandlerResolve({ success: false, message: 'Invalid Ethereum address', errorType: 'INVALID_ADDRESS' });
+        this.cardHandlerResolve({ success: false, message: 'Invalid or non-Ethereum address', errorType: 'INVALID_ADDRESS' });
         this.cardHandlerResolve = null;
       }
     }
@@ -345,11 +373,27 @@ export class NFCService {
    * Process wallet address scan response
    */
   private async processWalletScan(phoneResponse: string, reader: Reader): Promise<void> {
-    // Check if the response is an Ethereum address
-    if (EthereumService.isEthereumAddress(phoneResponse)) {
-      const ethAddress = EthereumService.normalizeEthereumAddress(phoneResponse);
+    let ethAddress: string | null = null;
+    let chainId: number | undefined;
+    
+    // Check if this is a CAIP-10 address or regular Ethereum address
+    if (CAIP10Service.isCAIP10Address(phoneResponse)) {
+      const parsed = CAIP10Service.parseCAIP10Address(phoneResponse);
+      if (parsed && parsed.namespace === 'eip155') {
+        ethAddress = CAIP10Service.extractEthereumAddress(phoneResponse);
+        chainId = parsed.chainId;
+        console.log(`✓ Wallet CAIP-10 address scanned: ${phoneResponse}`);
+        console.log(`  → Ethereum address: ${ethAddress} on chain ${chainId}`);
+      } else {
+        console.log(`⚠️ Non-Ethereum CAIP-10 address: ${phoneResponse}`);
+      }
+    } else if (EthereumService.isEthereumAddress(phoneResponse)) {
+      // Handle legacy plain Ethereum address format
+      ethAddress = EthereumService.normalizeEthereumAddress(phoneResponse);
       console.log(`✓ Wallet address scanned: ${ethAddress}`);
-      
+    }
+    
+    if (ethAddress) {
       if (this.walletScanResolve) {
         this.walletScanResolve({ 
           success: true, 
@@ -359,11 +403,11 @@ export class NFCService {
         this.walletScanResolve = null;
       }
     } else {
-      console.log('📱 Response is not an Ethereum address');
+      console.log('📱 Response is not a valid Ethereum address');
       if (this.walletScanResolve) {
         this.walletScanResolve({ 
           success: false, 
-          message: 'Invalid Ethereum address', 
+          message: 'Invalid or non-Ethereum address', 
           errorType: 'INVALID_ADDRESS' 
         });
         this.walletScanResolve = null;
