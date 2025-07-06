@@ -1,5 +1,5 @@
 import { NFC, Reader } from 'nfc-pcsc';
-import { AID, GET } from '../config/index.js';
+import { AID } from '../config/index.js';
 import { CardData } from '../types/index.js';
 import { EthereumService } from './ethereumService.js';
 import { AddressProcessor } from './addressProcessor.js';
@@ -98,15 +98,22 @@ export class NFCService {
     let processedAddress: string | null = null;
 
     try {
-      // @ts-expect-error Argument of type '{}' is not assignable to parameter of type 'never'.
-      const resp = await reader.transmit(GET, 256, {});
-      const sw = resp.readUInt16BE(resp.length - 2);
+      // Always send wallet:address command as NDEF URI to get the wallet address
+      const walletUri = 'wallet:address';
+      console.log(`📡 Sending NDEF URI: ${walletUri}`);
       
-      if (sw !== 0x9000) {
-        throw new Error('Bad status ' + sw.toString(16));
+      // Use PaymentService's createNDEFUriRecord to format the URI
+      const ndefMessage = PaymentService.createNDEFUriRecord(walletUri);
+      
+      // @ts-expect-error Argument of type '{}' is not assignable to parameter of type 'never'.
+      const resp = await reader.transmit(ndefMessage, 256, {});
+      
+      // Check if we got a valid response
+      if (!resp || resp.length === 0) {
+        throw new Error('No response from device');
       }
-
-      const phoneResponse = resp.slice(0, -2).toString();
+      
+      const phoneResponse = resp.toString();
       console.log('📱 Phone says →', phoneResponse);
       
       // Check if this is an Ethereum address so we can track it for cleanup
