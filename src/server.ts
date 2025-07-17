@@ -488,6 +488,11 @@ const cancelPaymentHandler: AsyncRequestHandler = async (req, res) => {
         // Cancel any ongoing NFC operations
         nfcApp.cancelCurrentOperation();
         
+        // Stop all transaction monitoring services
+        console.log('🛑 Stopping transaction monitoring services...');
+        TransactionMonitoringService.stopMonitoring();
+        RealtimeTransactionMonitor.stopMonitoring();
+        
         // Clear all active payment monitoring sessions
         activePayments.forEach((session, merchantAddress) => {
             console.log(`⏰ Clearing payment timeout for ${merchantAddress}`);
