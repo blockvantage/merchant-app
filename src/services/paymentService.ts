@@ -1,5 +1,5 @@
 import { Reader } from 'nfc-pcsc';
-import { RECIPIENT_ADDRESS, SUPPORTED_CHAINS } from '../config/index.js';
+import { MERCHANT_ADDRESS, SUPPORTED_CHAINS } from '../config/index.js';
 import { TokenWithPrice } from '../types/index.js';
 import { EthereumService } from './ethereumService.js';
 
@@ -24,11 +24,11 @@ export class PaymentService {
     if (EthereumService.isEthAddress(tokenAddress)) {
       // ETH payment request with chain ID
       // Format: ethereum:<recipient>@<chainId>?value=<amount>
-      return `ethereum:${RECIPIENT_ADDRESS}@${chainId}?value=${amountString}`;
+      return `ethereum:${MERCHANT_ADDRESS}@${chainId}?value=${amountString}`;
     } else {
       // ERC-20 token payment request with chain ID
       // Format: ethereum:<recipient>@<chainId>/transfer?address=<tokenContract>&uint256=<amount>
-      return `ethereum:${tokenAddress}@${chainId}/transfer?address=${RECIPIENT_ADDRESS}&uint256=${amountString}`;
+      return `ethereum:${tokenAddress}@${chainId}/transfer?address=${MERCHANT_ADDRESS}&uint256=${amountString}`;
     }
   }
 
