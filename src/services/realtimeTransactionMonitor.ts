@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { Alchemy, Network, Utils, AssetTransfersResult, AssetTransfersCategory, SortingOrder } from 'alchemy-sdk';
-import { RECIPIENT_ADDRESS, config } from '../config/index.js';
+import { MERCHANT_ADDRESS, config } from '../config/index.js';
 
 interface PaymentSession {
   recipientAddress: string;
@@ -53,12 +53,12 @@ export class RealtimeTransactionMonitor {
     console.log(`🔢 Expected amount: ${expectedAmount.toString()} smallest units`);
     console.log(`📊 Display amount: ${Number(expectedAmount) / Math.pow(10, tokenDecimals)} ${tokenSymbol}`);
     console.log(`⛓️  Chain: ${chainName} (ID: ${chainId})`);
-    console.log(`🏠 Recipient: ${RECIPIENT_ADDRESS}`);
+    console.log(`🏠 Recipient: ${MERCHANT_ADDRESS}`);
     console.log(`📄 Token contract: ${tokenAddress}`);
 
     // Store the monitoring session
     this.currentSession = {
-      recipientAddress: RECIPIENT_ADDRESS,
+      recipientAddress: MERCHANT_ADDRESS,
       expectedAmount,
       tokenAddress,
       tokenSymbol,

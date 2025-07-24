@@ -27,7 +27,10 @@ L2 Stablecoin > L2 Other > L2 ETH > L1 Stablecoin > L1 Other > L1 ETH
 
 2. **Environment setup:**
    ```bash
-   echo "ALCHEMY_API_KEY=your_alchemy_api_key_here" > .env
+   cp .env.example .env
+   # Edit .env and set your values:
+   # - ALCHEMY_API_KEY: Get from https://www.alchemy.com/
+   # - MERCHANT_ADDRESS: Your Ethereum wallet address to receive payments
    ```
 
 3. **Run the terminal:**
@@ -37,6 +40,25 @@ L2 Stablecoin > L2 Other > L2 ETH > L1 Stablecoin > L1 Other > L1 ETH
 
 4. **Open the interface:**
    Navigate to `http://localhost:3000`
+
+## ⚙️ Configuration
+
+### Required Environment Variables
+
+Create a `.env` file with the following variables:
+
+```env
+# Alchemy API key for blockchain interactions (required)
+ALCHEMY_API_KEY=your_alchemy_api_key_here
+
+# Merchant wallet address to receive payments (required)
+MERCHANT_ADDRESS=0xYourWalletAddressHere
+```
+
+**Important:** 
+- The `MERCHANT_ADDRESS` is where all payments will be sent across all supported chains
+- Make sure this is an address you control and have the private keys for
+- The same address will be used on all networks (Ethereum, Base, Arbitrum, etc.)
 
 ## 🏗️ Architecture
 
