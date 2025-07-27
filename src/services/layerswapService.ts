@@ -26,8 +26,10 @@ interface LayerswapQuote {
 interface LayerswapSwap {
   id: string;
   destination_address: string;
+  deposit_address?: string; // Some API responses include this directly
   status: string;
   requested_amount: number;
+  use_deposit_address?: boolean;
 }
 
 interface LayerswapDepositAction {
@@ -318,10 +320,13 @@ export class LayerswapService {
         destination_token: tokenSymbol,
         destination_address: MERCHANT_ADDRESS,
         amount: amount,
-        refuel: false,
+        quote_id: null,
         use_deposit_address: true,
         reference_id: Date.now().toString()
       };
+      
+      console.log('\n📤 Sending swap request to Layerswap:');
+      console.log(JSON.stringify(swapData, null, 2));
       
       const options = {
         hostname: 'api.layerswap.io',
@@ -338,15 +343,59 @@ export class LayerswapService {
         let data = '';
         res.on('data', (chunk) => data += chunk);
         res.on('end', () => {
+          console.log(`\n📥 Layerswap API Response:`);
+          console.log(`   Status: ${res.statusCode}`);
+          console.log(`   Headers:`, res.headers);
+          
           if (res.statusCode === 200 || res.statusCode === 201) {
             try {
+              console.log(`   Raw response length: ${data.length} bytes`);
               const response = JSON.parse(data);
-              const swap = response.data.swap;
-              const depositAction = response.data.deposit_actions[0];
+              
+              console.log(`\n📋 Response structure:`);
+              console.log(`   Has 'data' field: ${!!response.data}`);
+              console.log(`   Response keys: ${Object.keys(response).join(', ')}`);
+              
+              if (response.data) {
+                console.log(`   Data keys: ${Object.keys(response.data).join(', ')}`);
+                console.log(`   Has swap: ${!!response.data.swap}`);
+                console.log(`   Has deposit_actions: ${!!response.data.deposit_actions}`);
+                
+                if (response.data.deposit_actions) {
+                  console.log(`   Deposit actions count: ${response.data.deposit_actions.length}`);
+                  if (response.data.deposit_actions.length > 0) {
+                    const action = response.data.deposit_actions[0];
+                    console.log(`   First deposit action keys: ${Object.keys(action).join(', ')}`);
+                    console.log(`   Has call_data: ${!!action.call_data}`);
+                    console.log(`   Action type: ${action.type}`);
+                    console.log(`   To address: ${action.to_address}`);
+                    console.log(`   Amount: ${action.amount}`);
+                  }
+                }
+                
+                if (response.data.swap) {
+                  console.log(`\n📄 Swap details:`);
+                  console.log(`   ID: ${response.data.swap.id}`);
+                  console.log(`   Status: ${response.data.swap.status}`);
+                  console.log(`   Requested amount: ${response.data.swap.requested_amount}`);
+                  console.log(`   Use deposit address: ${response.data.swap.use_deposit_address}`);
+                }
+              }
+              
+              // Log the full response for debugging
+              console.log(`\n🔍 Full API response:`, JSON.stringify(response, null, 2));
+              
+              const swap = response.data?.swap;
+              const depositAction = response.data?.deposit_actions?.[0];
               
               if (depositAction && depositAction.call_data) {
                 // Decode the calldata to get the deposit address
                 const toAddress = '0x' + depositAction.call_data.slice(34, 74);
+                
+                console.log(`\n✅ Successfully extracted deposit info:`);
+                console.log(`   Swap ID: ${swap.id}`);
+                console.log(`   Deposit address: ${toAddress}`);
+                console.log(`   Amount: ${swap.requested_amount}`);
                 
                 resolve({
                   swapId: swap.id,
@@ -355,16 +404,65 @@ export class LayerswapService {
                   callData: depositAction.call_data,
                   tokenContract: depositAction.token.contract || ''
                 });
+              } else if (depositAction && depositAction.to_address) {
+                // Sometimes the deposit address is provided directly
+                console.log(`\n✅ Using direct deposit address:`);
+                console.log(`   Swap ID: ${swap.id}`);
+                console.log(`   Deposit address: ${depositAction.to_address}`);
+                console.log(`   Amount: ${swap.requested_amount}`);
+                
+                resolve({
+                  swapId: swap.id,
+                  depositAddress: depositAction.to_address,
+                  depositAmount: swap.requested_amount,
+                  callData: depositAction.call_data || '',
+                  tokenContract: depositAction.token?.contract || ''
+                });
+              } else if (swap && swap.deposit_address) {
+                // Sometimes the deposit address is on the swap object itself
+                console.log('\n✅ Using deposit address from swap object:');
+                console.log(`   Swap ID: ${swap.id}`);
+                console.log(`   Deposit address: ${swap.deposit_address}`);
+                console.log(`   Amount: ${swap.requested_amount}`);
+                
+                resolve({
+                  swapId: swap.id,
+                  depositAddress: swap.deposit_address,
+                  depositAmount: swap.requested_amount,
+                  callData: '',
+                  tokenContract: ''
+                });
               } else {
-                console.error('No deposit action in swap response');
+                console.error('\n❌ No valid deposit action in swap response');
+                console.error('Expected deposit_actions array with call_data or to_address, or swap.deposit_address');
+                console.error('Available swap fields:', swap ? Object.keys(swap).join(', ') : 'No swap object');
                 resolve(null);
               }
             } catch (e) {
-              console.error('Failed to parse swap response:', e);
+              console.error('\n❌ Failed to parse swap response:', e);
+              console.error('Raw response:', data.substring(0, 500));
               resolve(null);
             }
           } else {
-            console.error(`Swap creation failed: ${res.statusCode} - ${data}`);
+            console.error(`\n❌ Swap creation failed: ${res.statusCode}`);
+            console.error('Response body:', data || '(empty)');
+            
+            // Try to parse error details if available
+            if (data) {
+              try {
+                const errorResponse = JSON.parse(data);
+                console.error('Error details:', JSON.stringify(errorResponse, null, 2));
+              } catch (e) {
+                console.error('Raw error response:', data);
+              }
+            }
+            
+            // Log request details for debugging
+            console.error('\n🔍 Request details that failed:');
+            console.error(`   URL: https://${options.hostname}${options.path}`);
+            console.error(`   Method: ${options.method}`);
+            console.error(`   Headers:`, options.headers);
+            
             resolve(null);
           }
         });

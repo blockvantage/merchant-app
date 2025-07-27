@@ -159,6 +159,7 @@ async function monitorTransaction(
             try {
                 console.log(`🚀 Starting real-time WebSocket monitoring for ${chainName}`);
                 await RealtimeTransactionMonitor.startMonitoring(
+                    merchantAddress,  // Pass the recipient address (could be merchant or bridge)
                     expectedPayment.tokenAddress,
                     expectedPayment.requiredAmount,
                     expectedPayment.tokenSymbol,
@@ -237,6 +238,7 @@ async function monitorTransaction(
                 
                 // Fallback to original polling-based monitoring
                 await TransactionMonitoringService.startMonitoring(
+                    merchantAddress,  // Pass the recipient address (could be merchant or bridge)
                     expectedPayment.tokenAddress,
                     expectedPayment.requiredAmount,
                     expectedPayment.tokenSymbol,

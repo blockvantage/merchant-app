@@ -37,6 +37,7 @@ export class RealtimeTransactionMonitor {
    * Start real-time monitoring for a specific payment using WebSockets
    */
   static async startMonitoring(
+    recipientAddress: string,
     tokenAddress: string,
     expectedAmount: bigint,
     tokenSymbol: string,
@@ -53,12 +54,12 @@ export class RealtimeTransactionMonitor {
     console.log(`🔢 Expected amount: ${expectedAmount.toString()} smallest units`);
     console.log(`📊 Display amount: ${Number(expectedAmount) / Math.pow(10, tokenDecimals)} ${tokenSymbol}`);
     console.log(`⛓️  Chain: ${chainName} (ID: ${chainId})`);
-    console.log(`🏠 Recipient: ${MERCHANT_ADDRESS}`);
+    console.log(`🏠 Recipient: ${recipientAddress}`);
     console.log(`📄 Token contract: ${tokenAddress}`);
 
     // Store the monitoring session
     this.currentSession = {
-      recipientAddress: MERCHANT_ADDRESS,
+      recipientAddress,
       expectedAmount,
       tokenAddress,
       tokenSymbol,
