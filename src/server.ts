@@ -6,7 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { App } from './app.js'; // App class will be refactored
 import { AlchemyService } from './services/alchemyService.js';
-import { SUPPORTED_CHAINS, ChainConfig } from './config/index.js';
+import { SUPPORTED_CHAINS, ChainConfig, MERCHANT_ADDRESS } from './config/index.js';
 import { TransactionMonitoringService } from './services/transactionMonitoringService.js';
 import { RealtimeTransactionMonitor } from './services/realtimeTransactionMonitor.js';
 import { ConnectionMonitorService } from './services/connectionMonitorService.js';
@@ -332,7 +332,9 @@ async function monitorTransaction(
 }
 
 const initiatePaymentHandler: AsyncRequestHandler = async (req, res) => {
-    const { amount, merchantAddress } = req.body;
+    const { amount } = req.body;
+    const merchantAddress = MERCHANT_ADDRESS;
+    
     if (typeof amount !== 'number' || amount <= 0 || isNaN(amount)) {
         broadcast({ type: 'status', message: 'Invalid amount received from UI.', isError: true });
         res.status(400).json({ error: 'Invalid amount' });
