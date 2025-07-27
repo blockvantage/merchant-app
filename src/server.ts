@@ -10,6 +10,7 @@ import { SUPPORTED_CHAINS, ChainConfig } from './config/index.js';
 import { TransactionMonitoringService } from './services/transactionMonitoringService.js';
 import { RealtimeTransactionMonitor } from './services/realtimeTransactionMonitor.js';
 import { ConnectionMonitorService } from './services/connectionMonitorService.js';
+import { BridgeManager } from './services/bridgeManager.js';
 
 // Resolve __dirname for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -353,46 +354,84 @@ const initiatePaymentHandler: AsyncRequestHandler = async (req, res) => {
             console.log(`✅ Payment request sent successfully: ${paymentResult.message}`);
             console.log(`⛓️ Payment sent on: ${paymentResult.paymentInfo.chainName} (Chain ID: ${paymentResult.paymentInfo.chainId})`);
             
-            // Start transaction monitoring for the specific chain the payment was sent on
-            try {
-                await monitorTransaction(
-                    merchantAddress, 
-                    amount, 
-                    paymentResult.paymentInfo.chainId, 
-                    paymentResult.paymentInfo.chainName,
-                    {
-                        tokenSymbol: paymentResult.paymentInfo.selectedToken.symbol,
-                        tokenAddress: paymentResult.paymentInfo.selectedToken.address,
-                        requiredAmount: paymentResult.paymentInfo.requiredAmount,
-                        decimals: paymentResult.paymentInfo.selectedToken.decimals
-                    }
-                );
-                console.log(`🔍 Monitoring started for ${paymentResult.paymentInfo.chainName} payment of exactly ${paymentResult.paymentInfo.requiredAmount} smallest units of ${paymentResult.paymentInfo.selectedToken.symbol}`);
-                broadcast({ 
-                    type: 'monitoring_started', 
-                    message: `Monitoring ${paymentResult.paymentInfo.chainName} for payment...`,
-                    chainName: paymentResult.paymentInfo.chainName,
-                    chainId: paymentResult.paymentInfo.chainId
-                });
-            } catch (monitoringError) {
-                console.error(`❌ Failed to start monitoring on ${paymentResult.paymentInfo.chainName}:`, monitoringError);
+            // Check if this is a Layerswap payment
+            if (paymentResult.paymentInfo.isLayerswap) {
+                console.log(`💱 This is a Layerswap payment`);
+                console.log(`🔄 Swap ID: ${paymentResult.paymentInfo.layerswapSwapId}`);
+                console.log(`📍 Monitoring Layerswap deposit address: ${paymentResult.paymentInfo.layerswapDepositAddress}`);
                 
-                // Fallback: try to monitor on Ethereum mainnet (without specific token requirements)
-                console.log(`🔄 Falling back to Ethereum mainnet monitoring...`);
+                // For Layerswap, monitor the deposit address instead of merchant address
                 try {
-                    await monitorTransaction(merchantAddress, amount, 1, "Ethereum (fallback)");
+                    await monitorTransaction(
+                        paymentResult.paymentInfo.layerswapDepositAddress!, 
+                        amount, 
+                        paymentResult.paymentInfo.chainId, 
+                        paymentResult.paymentInfo.chainName,
+                        {
+                            tokenSymbol: paymentResult.paymentInfo.selectedToken.symbol,
+                            tokenAddress: paymentResult.paymentInfo.selectedToken.address,
+                            requiredAmount: paymentResult.paymentInfo.requiredAmount,
+                            decimals: paymentResult.paymentInfo.selectedToken.decimals
+                        }
+                    );
+                    console.log(`🔍 Monitoring started for Layerswap payment to ${paymentResult.paymentInfo.layerswapDepositAddress}`);
                     broadcast({ 
-                        type: 'status', 
-                        message: `Payment sent on ${paymentResult.paymentInfo.chainName}. Monitoring Ethereum mainnet as fallback.`,
-                        isWarning: true
+                        type: 'monitoring_started', 
+                        message: `Monitoring ${paymentResult.paymentInfo.chainName} for Layerswap payment...`,
+                        chainName: paymentResult.paymentInfo.chainName,
+                        chainId: paymentResult.paymentInfo.chainId,
+                        isLayerswap: true
                     });
-                } catch (fallbackError) {
-                    console.error(`❌ Fallback monitoring also failed:`, fallbackError);
+                } catch (monitoringError) {
+                    console.error(`❌ Failed to start monitoring for Layerswap payment:`, monitoringError);
                     broadcast({ 
                         type: 'payment_failure', 
-                        message: 'Payment sent but monitoring failed. Please verify manually.', 
+                        message: 'Layerswap payment sent but monitoring failed. Check swap status manually.', 
                         errorType: 'MONITORING_ERROR' 
                     });
+                }
+            } else {
+                // Normal payment monitoring (direct to merchant)
+                try {
+                    await monitorTransaction(
+                        merchantAddress, 
+                        amount, 
+                        paymentResult.paymentInfo.chainId, 
+                        paymentResult.paymentInfo.chainName,
+                        {
+                            tokenSymbol: paymentResult.paymentInfo.selectedToken.symbol,
+                            tokenAddress: paymentResult.paymentInfo.selectedToken.address,
+                            requiredAmount: paymentResult.paymentInfo.requiredAmount,
+                            decimals: paymentResult.paymentInfo.selectedToken.decimals
+                        }
+                    );
+                    console.log(`🔍 Monitoring started for ${paymentResult.paymentInfo.chainName} payment of exactly ${paymentResult.paymentInfo.requiredAmount} smallest units of ${paymentResult.paymentInfo.selectedToken.symbol}`);
+                    broadcast({ 
+                        type: 'monitoring_started', 
+                        message: `Monitoring ${paymentResult.paymentInfo.chainName} for payment...`,
+                        chainName: paymentResult.paymentInfo.chainName,
+                        chainId: paymentResult.paymentInfo.chainId
+                    });
+                } catch (monitoringError) {
+                    console.error(`❌ Failed to start monitoring on ${paymentResult.paymentInfo.chainName}:`, monitoringError);
+                    
+                    // Fallback: try to monitor on Ethereum mainnet (without specific token requirements)
+                    console.log(`🔄 Falling back to Ethereum mainnet monitoring...`);
+                    try {
+                        await monitorTransaction(merchantAddress, amount, 1, "Ethereum (fallback)");
+                        broadcast({ 
+                            type: 'status', 
+                            message: `Payment sent on ${paymentResult.paymentInfo.chainName}. Monitoring Ethereum mainnet as fallback.`,
+                            isWarning: true
+                        });
+                    } catch (fallbackError) {
+                        console.error(`❌ Fallback monitoring also failed:`, fallbackError);
+                        broadcast({ 
+                            type: 'payment_failure', 
+                            message: 'Payment sent but monitoring failed. Please verify manually.', 
+                            errorType: 'MONITORING_ERROR' 
+                        });
+                    }
                 }
             }
             
@@ -573,6 +612,16 @@ async function startServerAndApp() {
             throw error;
         }
 
+        // Initialize BridgeManager (handles all bridge providers including Layerswap)
+        try {
+            console.log('🌉 Initializing bridge providers...');
+            await BridgeManager.initialize();
+            console.log('✅ Bridge providers initialized.');
+        } catch (error) {
+            console.error('⚠️ Failed to initialize BridgeManager, continuing without cross-chain support:', error);
+            // Continue without bridge support if initialization fails
+        }
+        
         // Initialize PriceCacheService and start NFC listeners via App class
         await nfcApp.initializeServices(); 
         console.log('🔌 NFC Application services (including Price Cache) initialized.');

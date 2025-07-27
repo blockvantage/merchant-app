@@ -48,4 +48,7 @@ export interface MultiChainPortfolio {
   chains: ChainBalances[];
   totalValueUSD: number;
   allTokens: TokenWithPrice[];
-} 
+}
+
+// Re-export bridge types
+export * from './bridge.js'; 
