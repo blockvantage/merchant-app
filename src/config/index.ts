@@ -12,6 +12,10 @@ if (!process.env.ALCHEMY_API_KEY) {
   throw new Error('ALCHEMY_API_KEY environment variable is required. Please set it in your .env file.');
 }
 
+if (!process.env.LAYERSWAP_API_KEY) {
+  throw new Error('LAYERSWAP_API_KEY environment variable is required. Please set it in your .env file.');
+}
+
 // Recipient address for payments - loaded from environment variable
 export const MERCHANT_ADDRESS = process.env.MERCHANT_ADDRESS;
 
@@ -21,6 +25,15 @@ export const COOLDOWN_DURATION = 30000; // 30 seconds cooldown after processing
 
 // API configuration
 export const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY;
+export const LAYERSWAP_API_KEY = process.env.LAYERSWAP_API_KEY;
+
+// Parse merchant chains from environment variable
+// If not set, merchant accepts all chains
+export const MERCHANT_CHAINS = process.env.MERCHANT_CHAINS
+  ? process.env.MERCHANT_CHAINS
+      .split(',')
+      .map(chain => chain.trim().toLowerCase())
+  : null; // null means accept all chains
 
 // Multi-chain Alchemy configuration
 export interface ChainConfig {

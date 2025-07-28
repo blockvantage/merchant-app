@@ -6,10 +6,11 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { App } from './app.js'; // App class will be refactored
 import { AlchemyService } from './services/alchemyService.js';
-import { SUPPORTED_CHAINS, ChainConfig } from './config/index.js';
+import { SUPPORTED_CHAINS, ChainConfig, MERCHANT_ADDRESS } from './config/index.js';
 import { TransactionMonitoringService } from './services/transactionMonitoringService.js';
 import { RealtimeTransactionMonitor } from './services/realtimeTransactionMonitor.js';
 import { ConnectionMonitorService } from './services/connectionMonitorService.js';
+import { BridgeManager } from './services/bridgeManager.js';
 
 // Resolve __dirname for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -158,6 +159,7 @@ async function monitorTransaction(
             try {
                 console.log(`🚀 Starting real-time WebSocket monitoring for ${chainName}`);
                 await RealtimeTransactionMonitor.startMonitoring(
+                    merchantAddress,  // Pass the recipient address (could be merchant or bridge)
                     expectedPayment.tokenAddress,
                     expectedPayment.requiredAmount,
                     expectedPayment.tokenSymbol,
@@ -236,6 +238,7 @@ async function monitorTransaction(
                 
                 // Fallback to original polling-based monitoring
                 await TransactionMonitoringService.startMonitoring(
+                    merchantAddress,  // Pass the recipient address (could be merchant or bridge)
                     expectedPayment.tokenAddress,
                     expectedPayment.requiredAmount,
                     expectedPayment.tokenSymbol,
@@ -329,7 +332,9 @@ async function monitorTransaction(
 }
 
 const initiatePaymentHandler: AsyncRequestHandler = async (req, res) => {
-    const { amount, merchantAddress } = req.body;
+    const { amount } = req.body;
+    const merchantAddress = MERCHANT_ADDRESS;
+    
     if (typeof amount !== 'number' || amount <= 0 || isNaN(amount)) {
         broadcast({ type: 'status', message: 'Invalid amount received from UI.', isError: true });
         res.status(400).json({ error: 'Invalid amount' });
@@ -353,10 +358,21 @@ const initiatePaymentHandler: AsyncRequestHandler = async (req, res) => {
             console.log(`✅ Payment request sent successfully: ${paymentResult.message}`);
             console.log(`⛓️ Payment sent on: ${paymentResult.paymentInfo.chainName} (Chain ID: ${paymentResult.paymentInfo.chainId})`);
             
-            // Start transaction monitoring for the specific chain the payment was sent on
+            // Determine the target address based on whether it's a Layerswap transaction
+            const targetAddress = paymentResult.paymentInfo.isLayerswap 
+                ? paymentResult.paymentInfo.layerswapDepositAddress! 
+                : merchantAddress;
+            
+            if (paymentResult.paymentInfo.isLayerswap) {
+                console.log(`💱 This is a Layerswap payment`);
+                console.log(`🔄 Swap ID: ${paymentResult.paymentInfo.layerswapSwapId}`);
+                console.log(`📍 Monitoring Layerswap deposit address: ${paymentResult.paymentInfo.layerswapDepositAddress}`);
+            }
+            
+            // Monitor the transaction with the appropriate target address
             try {
                 await monitorTransaction(
-                    merchantAddress, 
+                    targetAddress, 
                     amount, 
                     paymentResult.paymentInfo.chainId, 
                     paymentResult.paymentInfo.chainName,
@@ -372,7 +388,8 @@ const initiatePaymentHandler: AsyncRequestHandler = async (req, res) => {
                     type: 'monitoring_started', 
                     message: `Monitoring ${paymentResult.paymentInfo.chainName} for payment...`,
                     chainName: paymentResult.paymentInfo.chainName,
-                    chainId: paymentResult.paymentInfo.chainId
+                    chainId: paymentResult.paymentInfo.chainId,
+                    isLayerswap: paymentResult.paymentInfo.isLayerswap
                 });
             } catch (monitoringError) {
                 console.error(`❌ Failed to start monitoring on ${paymentResult.paymentInfo.chainName}:`, monitoringError);
@@ -573,6 +590,16 @@ async function startServerAndApp() {
             throw error;
         }
 
+        // Initialize BridgeManager (handles all bridge providers including Layerswap)
+        try {
+            console.log('🌉 Initializing bridge providers...');
+            await BridgeManager.initialize();
+            console.log('✅ Bridge providers initialized.');
+        } catch (error) {
+            console.error('⚠️ Failed to initialize BridgeManager, continuing without cross-chain support:', error);
+            // Continue without bridge support if initialization fails
+        }
+        
         // Initialize PriceCacheService and start NFC listeners via App class
         await nfcApp.initializeServices(); 
         console.log('🔌 NFC Application services (including Price Cache) initialized.');

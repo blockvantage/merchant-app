@@ -2,6 +2,18 @@ import { Reader } from 'nfc-pcsc';
 import { MERCHANT_ADDRESS, SUPPORTED_CHAINS } from '../config/index.js';
 import { TokenWithPrice } from '../types/index.js';
 import { EthereumService } from './ethereumService.js';
+import { BridgeManager } from './bridgeManager.js';
+
+// Export the payment result type for use in other modules
+export interface PaymentResult {
+  selectedToken: TokenWithPrice;
+  requiredAmount: bigint;
+  chainId: number;
+  chainName: string;
+  isLayerswap?: boolean;
+  layerswapDepositAddress?: string;
+  layerswapSwapId?: string;
+}
 
 /**
  * Service for handling payment requests and EIP-681 URI generation
@@ -128,12 +140,7 @@ export class PaymentService {
   /**
    * Calculate payment options and send payment request
    */
-  static async calculateAndSendPayment(tokensWithPrices: TokenWithPrice[], reader: Reader, targetUSD: number): Promise<{
-    selectedToken: TokenWithPrice;
-    requiredAmount: bigint; // Amount in smallest units as BigInt
-    chainId: number;
-    chainName: string;
-  }> {
+  static async calculateAndSendPayment(tokensWithPrices: TokenWithPrice[], reader: Reader, targetUSD: number): Promise<PaymentResult> {
     const startTime = Date.now();
     console.log(`⏱️ [PROFILE] Starting calculateAndSendPayment for $${targetUSD} with ${tokensWithPrices.length} tokens`);
     
@@ -227,6 +234,76 @@ export class PaymentService {
     console.log(`📊 Exact amount: ${requiredAmount.toString()} smallest units`);
     console.log(`⛓️  Chain: ${selectedToken.chainDisplayName} (Chain ID: ${selectedToken.chainId})`);
     console.log(`💵 Price: $${selectedToken.priceUSD.toFixed(4)} per ${selectedToken.symbol}`);
+    
+    // Check if merchant supports this chain
+    const isMerchantChain = BridgeManager.isMerchantSupportedChain(selectedToken.chainId);
+    
+    if (!isMerchantChain) {
+      console.log(`\n🔄 Chain ${selectedToken.chainDisplayName} not supported by merchant, checking bridge routes...`);
+      
+      // Find a bridge route
+      const routeResult = await BridgeManager.findBestRoute(selectedToken.chainId, selectedToken.symbol);
+      
+      if (!routeResult) {
+        throw new Error(`Payment not possible: ${selectedToken.symbol} on ${selectedToken.chainDisplayName} cannot be routed to merchant chains`);
+      }
+      
+      console.log(`✅ Found route via ${routeResult.provider.name} to ${routeResult.route.destinationNetwork}`);
+      
+      // Create the bridge swap
+      const swapResult = await BridgeManager.createSwap(routeResult.provider, routeResult.route, displayAmount);
+      
+      if (!swapResult) {
+        throw new Error(`Failed to create cross-chain payment route via ${routeResult.provider.name}`);
+      }
+      
+      console.log(`\n💱 CROSS-CHAIN PAYMENT via ${swapResult.bridgeName}:`);
+      console.log(`🔄 Swap ID: ${swapResult.swapId}`);
+      console.log(`📍 Send ${displayAmount} ${selectedToken.symbol} to: ${swapResult.depositAddress}`);
+      console.log(`🎯 Merchant will receive on: ${routeResult.route.destinationNetwork}`);
+      
+      // For bridge payments, we send to the bridge deposit address
+      const swapAmount = BigInt(Math.round(swapResult.depositAmount * Math.pow(10, selectedToken.decimals)));
+      
+      // Create custom EIP-681 URI for bridge payment
+      let paymentUri: string;
+      if (EthereumService.isEthAddress(selectedToken.address)) {
+        // ETH payment
+        paymentUri = `ethereum:${swapResult.depositAddress}@${selectedToken.chainId}?value=${swapAmount.toString()}`;
+      } else {
+        // ERC-20 token payment
+        paymentUri = `ethereum:${selectedToken.address}@${selectedToken.chainId}/transfer?address=${swapResult.depositAddress}&uint256=${swapAmount.toString()}`;
+      }
+      
+      console.log(`\n💳 Sending ${swapResult.bridgeName} payment request:`);
+      console.log(`📄 URI: ${paymentUri}`);
+      
+      const nfcTransmissionStart = Date.now();
+      const ndefMessage = this.createNDEFUriRecord(paymentUri);
+      // @ts-expect-error Argument of type '{}' is not assignable to parameter of type 'never'.
+      await reader.transmit(ndefMessage, 256, {});
+      const nfcTransmissionTime = Date.now() - nfcTransmissionStart;
+      
+      console.log(`⏱️ [PROFILE] NFC payment request transmission completed in ${nfcTransmissionTime}ms`);
+      console.log(`✅ ${swapResult.bridgeName} payment request sent`);
+      console.log(`📱 Customer will pay to ${swapResult.bridgeName}, merchant receives on ${routeResult.route.destinationNetwork}`);
+      
+      const totalTime = Date.now() - startTime;
+      console.log(`⏱️ [PROFILE] calculateAndSendPayment (with bridge) completed in ${totalTime}ms`);
+      
+      // Return information needed for monitoring bridge payment
+      return {
+        selectedToken,
+        requiredAmount: swapAmount,
+        chainId: selectedToken.chainId,
+        chainName: selectedToken.chainDisplayName,
+        isLayerswap: swapResult.bridgeName === 'Layerswap', // For backward compatibility
+        layerswapDepositAddress: swapResult.depositAddress,
+        layerswapSwapId: swapResult.swapId
+      };
+    }
+    
+    // Normal payment flow (merchant supports the chain)
     console.log(`🔍 Payment will be monitored on: ${selectedToken.chainDisplayName}`);
     
     // Send payment request using the exact amount
