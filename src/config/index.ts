@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-export const AID = 'F043525950544F'; // F0 + CRYPTO in HEX format
+export const AID = 'F046524545504159'; // F0 + FREEPAY in HEX format
 
 // Validate required environment variables
 if (!process.env.MERCHANT_ADDRESS) {
