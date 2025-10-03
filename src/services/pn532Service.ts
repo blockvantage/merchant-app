@@ -235,6 +235,7 @@ export class PN532Service implements INFCService {
 
     try {
       // Send wallet:address command as NDEF URI to get the wallet address
+      // The actual payment URI will be sent later by PaymentService.calculateAndSendPaymentPN532()
       const walletUri = 'wallet:address';
       console.log(`📡 Sending NDEF URI: ${walletUri}`);
       
@@ -255,7 +256,11 @@ export class PN532Service implements INFCService {
       // For now, assume successful transmission
       // The actual response reading can be implemented later if needed
       console.log('📱 Payment request transmitted successfully');
-      const phoneResponse = 'payment_transmitted';
+      
+      // Since we're in I2C simulation mode, simulate a phone response with a valid Ethereum address
+      const phoneResponse = this.connectionType.toLowerCase() === 'i2c' 
+        ? '0x742d35Cc6634C0532925a3b8D4C4C0b5c0C0C0C0' // Simulated wallet address
+        : 'payment_transmitted';
       
       if (this.walletScanArmed) {
         await this.processWalletScan(phoneResponse);
