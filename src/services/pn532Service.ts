@@ -85,7 +85,7 @@ export class PN532Service implements INFCService {
         });
 
         // Create PN532 instance with UART
-        this.pn532 = new PN532(this.serialPort);
+        this.pn532 = new pn532.PN532(this.serialPort);
       }
 
       // Wait for PN532 to be ready
