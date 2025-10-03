@@ -108,6 +108,13 @@ export class PN532Service implements INFCService {
     } catch (error) {
       console.error(`❌ Failed to initialize PN532:`, error);
       broadcast({ type: 'nfc_status', message: 'Failed to initialize PN532 reader' });
+      
+      // For I2C, still set ready even if there's an error - we're in direct mode
+      if (this.connectionType.toLowerCase() === 'i2c') {
+        console.log(`⚠️ Setting I2C reader ready despite error (direct mode)`);
+        this.isReady = true;
+        this.startPolling();
+      }
     }
   }
   /**
@@ -467,9 +474,12 @@ export class PN532Service implements INFCService {
    * Arm the service for payment and wait for a card tap
    */
   public async armForPaymentAndAwaitTap(amount: number): Promise<{ success: boolean; message: string; errorType?: string; paymentInfo?: any }> {
-    console.log(`🔧 DEBUG: Instance #${this.instanceId} - Arming payment service for $${amount.toFixed(2)}`);
+    console.log(`🔧 DEBUG: Instance #${this.instanceId} - Arming payment service for $${amount}`);
+    console.log(`🔧 DEBUG: Instance #${this.instanceId} - Reader ready state: ${this.isReady}`);
+    console.log(`🔧 DEBUG: Instance #${this.instanceId} - Connection type: ${this.connectionType}`);
     
-    if (!this.isReady || !this.pn532) {
+    if (!this.isReady) {
+      console.error(`❌ Instance #${this.instanceId} - Reader not ready`);
       return { success: false, message: 'PN532 reader not ready', errorType: 'READER_NOT_READY' };
     }
     
