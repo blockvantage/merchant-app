@@ -107,8 +107,7 @@ export class NFCService implements INFCService {
       // Use PaymentService's createNDEFUriRecord to format the URI
       const ndefMessage = PaymentService.createNDEFUriRecord(walletUri);
       
-      // @ts-expect-error Argument of type '{}' is not assignable to parameter of type 'never'.
-      const resp = await reader.transmit(ndefMessage, 256, {});
+      const resp = await reader.transmit(ndefMessage, 256);
       
       // Check if we got a valid response
       if (!resp || resp.length === 0) {

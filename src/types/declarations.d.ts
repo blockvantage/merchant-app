@@ -1,5 +1,40 @@
 // Type declarations for modules without TypeScript support
 
+declare module 'nfc-pcsc' {
+  import { EventEmitter } from 'events';
+  
+  export class NFC extends EventEmitter {
+    constructor();
+    on(event: 'reader', listener: (reader: Reader) => void): this;
+    on(event: 'error', listener: (error: Error) => void): this;
+    on(event: string, listener: (...args: any[]) => void): this;
+  }
+  
+  export class Reader extends EventEmitter {
+    reader: {
+      name: string;
+    };
+    name: string;
+    aid: string;
+    
+    on(event: 'card', listener: (card: Card) => void): this;
+    on(event: 'card.off', listener: (card: Card) => void): this;
+    on(event: 'error', listener: (error: Error) => void): this;
+    on(event: 'end', listener: () => void): this;
+    on(event: string, listener: (...args: any[]) => void): this;
+    
+    transmit(data: Buffer, responseLength: number): Promise<Buffer>;
+    close(): void;
+  }
+  
+  export interface Card {
+    type: string;
+    atr: Buffer;
+    standard: string;
+    uid: string;
+  }
+}
+
 declare module 'pn532' {
   import { EventEmitter } from 'events';
   

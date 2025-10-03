@@ -108,8 +108,7 @@ export class PaymentService {
       console.log(`📡 NDEF Message (${ndefMessage.length} bytes): ${ndefMessage.toString('hex')}`);
       
       // Send the NDEF formatted URI
-      // @ts-expect-error Argument of type '{}' is not assignable to parameter of type 'never'.
-      const response = await reader.transmit(ndefMessage, 256, {});
+      const response = await reader.transmit(ndefMessage, 256);
       
       if (response && response.length > 0) {
         console.log(`✅ NDEF payment request sent successfully for ${chainName}!`);
@@ -457,8 +456,7 @@ export class PaymentService {
       
       const nfcTransmissionStart = Date.now();
       const ndefMessage = this.createNDEFUriRecord(paymentUri);
-      // @ts-expect-error Argument of type '{}' is not assignable to parameter of type 'never'.
-      await reader.transmit(ndefMessage, 256, {});
+      await reader.transmit(ndefMessage, 256);
       const nfcTransmissionTime = Date.now() - nfcTransmissionStart;
       
       console.log(`⏱️ [PROFILE] NFC payment request transmission completed in ${nfcTransmissionTime}ms`);
