@@ -33,6 +33,7 @@ declare module 'nfc-pcsc' {
     standard: string;
     uid: string;
   }
+}
 
 declare module 'pn532' {
   import { EventEmitter } from 'events';
