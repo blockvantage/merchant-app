@@ -1,6 +1,7 @@
-import { NFC, Reader } from 'nfc-pcsc';
-import { AID } from '../config/index.js';
-import { CardData } from '../types/index.js';
+import { PN532 } from 'pn532';
+import { SerialPort } from 'serialport';
+import { openSync } from 'i2c-bus';
+import * as ndef from 'ndef';
 import { INFCService } from '../interfaces/INFCService.js';
 import { EthereumService } from './ethereumService.js';
 import { AddressProcessor } from './addressProcessor.js';
@@ -10,10 +11,13 @@ import { CAIP10Service } from './caip10Service.js';
 import { broadcast } from '../server.js';
 
 /**
- * Service for handling NFC reader operations (ACR1252U)
+ * PN532 NFC Service implementation
+ * Supports HiLetgo PN532 NFC NXP RFID Module V3 Kit
  */
-export class NFCService implements INFCService {
-  private nfc: NFC;
+export class PN532Service implements INFCService {
+  private pn532: PN532 | null = null;
+  private serialPort: SerialPort | null = null;
+  private i2cBus: any = null;
   private paymentArmed: boolean = false;
   private walletScanArmed: boolean = false;
   private currentPaymentAmount: number | null = null;
@@ -21,145 +25,196 @@ export class NFCService implements INFCService {
   private cardHandlerResolve: ((result: { success: boolean; message: string; errorType?: string; paymentInfo?: any }) => void) | null = null;
   private walletScanPromise: Promise<{ success: boolean; message: string; address?: string; errorType?: string }> | null = null;
   private walletScanResolve: ((result: { success: boolean; message: string; address?: string; errorType?: string }) => void) | null = null;
-  
+  private isReady: boolean = false;
+  private pollInterval: NodeJS.Timeout | null = null;
+
   // Add instance tracking
   private static instanceCount = 0;
   private instanceId: number;
 
-  constructor() {
-    NFCService.instanceCount++;
-    this.instanceId = NFCService.instanceCount;
-    console.log(`🏗️ DEBUG: Creating NFCService instance #${this.instanceId} (total instances: ${NFCService.instanceCount})`);
+  constructor(
+    private connectionType: string = 'UART',
+    private serialPortPath: string = '/dev/ttyUSB0', 
+    private baudRate: number = 115200,
+    private i2cAddress: number = 0x24,
+    private i2cBusNumber: number = 1
+  ) {
+    PN532Service.instanceCount++;
+    this.instanceId = PN532Service.instanceCount;
+    console.log(`🏗️ DEBUG: Creating PN532Service instance #${this.instanceId} (total instances: ${PN532Service.instanceCount})`);
+    console.log(`🔧 Connection type: ${connectionType}`);
     
-    this.nfc = new NFC();
-    this.setupNFC();
+    this.initializePN532();
   }
 
   /**
-   * Setup NFC readers and event handlers
+   * Initialize PN532 connection
    */
-  private setupNFC(): void {
-    console.log(`🔧 DEBUG: Instance #${this.instanceId} - Setting up NFC readers`);
-    this.nfc.on('reader', (reader: Reader) => {
-      console.log(`💳 Instance #${this.instanceId} - NFC Reader Detected:`, reader.name);
-      reader.aid = AID; // ★ IMPORTANT ★ Set AID immediately
-      console.log(`🔑 Instance #${this.instanceId} - AID set for reader:`, AID);
-      broadcast({ type: 'nfc_status', message: `Reader connected: ${reader.name}`});
-      this.setupReaderEvents(reader);
-    });
-  }
+  private async initializePN532(): Promise<void> {
+    try {
+      if (this.connectionType.toLowerCase() === 'i2c') {
+        console.log(`🔧 DEBUG: Instance #${this.instanceId} - Initializing PN532 over I2C (bus: ${this.i2cBusNumber}, address: 0x${this.i2cAddress.toString(16)})`);
+        
+        // Create I2C connection
+        this.i2cBus = openSync(this.i2cBusNumber);
+        console.log(`✅ I2C bus ${this.i2cBusNumber} opened successfully`);
+        
+        // Create PN532 instance with I2C
+        this.pn532 = new PN532(this.i2cBus);
+        
+      } else {
+        console.log(`🔧 DEBUG: Instance #${this.instanceId} - Initializing PN532 over UART on ${this.serialPortPath}`);
+        
+        // Create serial port connection
+        this.serialPort = new SerialPort({
+          path: this.serialPortPath,
+          baudRate: this.baudRate,
+          autoOpen: false
+        });
 
-  /**
-   * Setup event handlers for a specific reader
-   */
-  private setupReaderEvents(reader: Reader): void {
-    console.log(`🔧 DEBUG: Instance #${this.instanceId} - Setting up event handlers for reader: ${reader.name}`);
-    
-    // Use arrow functions to preserve 'this' context
-    (reader as any).on('card', async (card: CardData) => {
-      console.log(`🔧 DEBUG: Instance #${this.instanceId} - Card event handler called, this.paymentArmed = ${this.paymentArmed}`);
-      await this.handleCard(reader, card);
-    });
+        // Open the serial port
+        await new Promise<void>((resolve, reject) => {
+          this.serialPort!.open((err) => {
+            if (err) {
+              console.error(`❌ Failed to open serial port ${this.serialPortPath}:`, err.message);
+              reject(err);
+            } else {
+              console.log(`✅ Serial port ${this.serialPortPath} opened successfully`);
+              resolve();
+            }
+          });
+        });
 
-    (reader as any).on('error', (err: Error) => {
-      if (err.message.includes('Cannot process ISO 14443-4 tag')) {
-        console.log(`💳 Instance #${this.instanceId} - Payment card detected - ignoring tap`);
-        broadcast({ type: 'nfc_status', message: 'Payment card detected - not supported' });
-        return;
+        // Create PN532 instance with UART
+        this.pn532 = new PN532(this.serialPort);
       }
-      console.error(`❌ Instance #${this.instanceId} - Reader error:`, err);
-    });
 
-    (reader as any).on('end', () => {
-      console.log(`🔌 Instance #${this.instanceId} - Reader disconnected:`, reader.name);
-      broadcast({ type: 'nfc_status', message: `Reader disconnected: ${reader.name}` });
-    });
+      // Wait for PN532 to be ready
+      this.pn532.on('ready', () => {
+        console.log(`💳 Instance #${this.instanceId} - PN532 Reader Ready`);
+        this.isReady = true;
+        broadcast({ type: 'nfc_status', message: 'PN532 Reader connected and ready' });
+        this.startPolling();
+      });
+
+      this.pn532.on('error', (err: Error) => {
+        console.error(`❌ Instance #${this.instanceId} - PN532 error:`, err);
+        broadcast({ type: 'nfc_status', message: `PN532 error: ${err.message}` });
+      });
+
+    } catch (error) {
+      console.error(`❌ Failed to initialize PN532:`, error);
+      broadcast({ type: 'nfc_status', message: 'Failed to initialize PN532 reader' });
+    }
   }
 
   /**
-   * Handle card detection and processing
+   * Start polling for NFC tags
    */
-  private async handleCard(reader: Reader, card: CardData): Promise<void> {
-    console.log(`🔧 DEBUG: Instance #${this.instanceId} - Card event handler called, this.paymentArmed = ${this.paymentArmed}`);
-    console.log('📱 Card Detected:', {
-      type: card.type,
-      standard: card.standard
-    });
-
-    // Debug: Log current armed state when card is detected
-    console.log(`🔍 DEBUG: Instance #${this.instanceId} - Armed state check - paymentArmed: ${this.paymentArmed}, walletScanArmed: ${this.walletScanArmed}`);
-    console.log(`🔍 DEBUG: Instance #${this.instanceId} - Current payment amount: ${this.currentPaymentAmount}`);
-    console.log(`🔍 DEBUG: Instance #${this.instanceId} - Card handler resolve exists: ${!!this.cardHandlerResolve}`);
-
-    if (!this.paymentArmed && !this.walletScanArmed) {
-      console.log(`💤 Instance #${this.instanceId} - Reader not armed for payment or wallet scan, ignoring tap`);
-      broadcast({ type: 'nfc_status', message: 'Reader not armed' });
+  private startPolling(): void {
+    if (!this.pn532 || !this.isReady) {
+      console.log(`⚠️ Instance #${this.instanceId} - PN532 not ready for polling`);
       return;
     }
 
-    let processedAddress: string | null = null;
+    console.log(`🔄 Instance #${this.instanceId} - Starting NFC tag polling`);
+    
+    // Poll for tags every 500ms
+    this.pollInterval = setInterval(async () => {
+      if (!this.paymentArmed && !this.walletScanArmed) {
+        return; // Not armed, skip polling
+      }
 
-    try {
-      // Always send wallet:address command as NDEF URI to get the wallet address
-      const walletUri = 'wallet:address';
-      console.log(`📡 Sending NDEF URI: ${walletUri}`);
-      
-      // Use PaymentService's createNDEFUriRecord to format the URI
-      const ndefMessage = PaymentService.createNDEFUriRecord(walletUri);
-      
-      // @ts-expect-error Argument of type '{}' is not assignable to parameter of type 'never'.
-      const resp = await reader.transmit(ndefMessage, 256, {});
-      
-      // Check if we got a valid response
-      if (!resp || resp.length === 0) {
-        throw new Error('No response from device');
-      }
-      
-      const phoneResponse = resp.toString();
-      console.log('📱 Phone says →', phoneResponse);
-      
-      // Check if this is a CAIP-10 address or regular Ethereum address
-      let ethAddress: string | null = null;
-      
-      if (CAIP10Service.isCAIP10Address(phoneResponse)) {
-        // Extract Ethereum address from CAIP-10 format
-        ethAddress = CAIP10Service.extractEthereumAddress(phoneResponse);
-        if (ethAddress) {
-          console.log(`✓ Extracted Ethereum address from CAIP-10: ${ethAddress}`);
-          processedAddress = ethAddress;
+      try {
+        const tag = await this.pn532!.scanTag();
+        if (tag) {
+          console.log(`📱 Instance #${this.instanceId} - Tag detected:`, tag.uid);
+          await this.handleTag(tag);
         }
-      } else if (EthereumService.isEthereumAddress(phoneResponse)) {
-        // Handle legacy plain Ethereum address format
-        ethAddress = EthereumService.normalizeEthereumAddress(phoneResponse);
-        processedAddress = ethAddress;
+      } catch (error) {
+        // Ignore scan errors during polling - they're expected when no tag is present
+        if (error instanceof Error && !error.message.includes('Timeout')) {
+          console.error(`❌ Instance #${this.instanceId} - Polling error:`, error);
+        }
       }
-      
-      if (this.walletScanArmed) {
-        await this.processWalletScan(phoneResponse, reader);
-      } else if (this.paymentArmed && this.currentPaymentAmount !== null) {
-        await this.processPhoneResponse(phoneResponse, reader, this.currentPaymentAmount);
-      }
-      
-    } catch (e) {
-      console.error('❌ Error processing card:', e);
-      
-      // Clean up any address that might be stuck in processing state
-      if (processedAddress) {
-        AddressProcessor.finishProcessing(processedAddress);
-      }
-      
-      if (this.cardHandlerResolve) {
-        this.cardHandlerResolve({ success: false, message: 'Error processing card', errorType: 'CARD_ERROR' });
-        this.cardHandlerResolve = null;
-      }
-    }
-    // Note: Do NOT close the reader here - it needs to stay connected for future card detections
+    }, 500);
   }
 
   /**
-   * Process the response from the phone
+   * Handle detected NFC tag
    */
-  private async processPhoneResponse(phoneResponse: string, reader: Reader, amount: number): Promise<void> {
+  private async handleTag(tag: any): Promise<void> {
+    console.log(`🔧 DEBUG: Instance #${this.instanceId} - Tag event handler called, paymentArmed: ${this.paymentArmed}, walletScanArmed: ${this.walletScanArmed}`);
+    
+    if (!this.paymentArmed && !this.walletScanArmed) {
+      console.log(`💤 Instance #${this.instanceId} - Reader not armed for payment or wallet scan, ignoring tap`);
+      return;
+    }
+
+    try {
+      // Send wallet:address command as NDEF URI to get the wallet address
+      const walletUri = 'wallet:address';
+      console.log(`📡 Sending NDEF URI: ${walletUri}`);
+      
+      // Create NDEF message with URI record
+      const uriRecord = ndef.uriRecord(walletUri);
+      const ndefMessage = ndef.encodeMessage([uriRecord]);
+      
+      // Write NDEF message to tag
+      await this.pn532!.writeNdefData(ndefMessage);
+      
+      // Wait a moment for the phone to process
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Read response from tag
+      const responseData = await this.pn532!.readNdefData();
+      
+      if (!responseData || responseData.length === 0) {
+        throw new Error('No response from device');
+      }
+      
+      // Decode NDEF message
+      const records = ndef.decodeMessage(Array.from(responseData));
+      let phoneResponse = '';
+      
+      if (records.length > 0) {
+        const record = records[0];
+        if (record.type === 'U') { // URI record
+          phoneResponse = ndef.uri.decodePayload(record.payload);
+        } else if (record.type === 'T') { // Text record
+          phoneResponse = ndef.text.decodePayload(record.payload);
+        } else {
+          phoneResponse = Buffer.from(record.payload).toString('utf8');
+        }
+      }
+      
+      console.log('📱 Phone says →', phoneResponse);
+      
+      if (this.walletScanArmed) {
+        await this.processWalletScan(phoneResponse);
+      } else if (this.paymentArmed && this.currentPaymentAmount !== null) {
+        await this.processPhoneResponse(phoneResponse, this.currentPaymentAmount);
+      }
+      
+    } catch (error) {
+      console.error('❌ Error processing tag:', error);
+      
+      if (this.cardHandlerResolve) {
+        this.cardHandlerResolve({ success: false, message: 'Error processing tag', errorType: 'TAG_ERROR' });
+        this.cardHandlerResolve = null;
+      }
+      
+      if (this.walletScanResolve) {
+        this.walletScanResolve({ success: false, message: 'Error processing tag', errorType: 'TAG_ERROR' });
+        this.walletScanResolve = null;
+      }
+    }
+  }
+
+  /**
+   * Process the response from the phone for payment
+   */
+  private async processPhoneResponse(phoneResponse: string, amount: number): Promise<void> {
     let ethAddress: string | null = null;
     let chainId: number = 1; // Default to Ethereum mainnet
     
@@ -216,7 +271,7 @@ export class NFCService implements INFCService {
         
         // Calculate and send payment request using all tokens across all chains
         const paymentStart = Date.now();
-        const paymentInfo = await PaymentService.calculateAndSendPayment(portfolio.allTokens, reader, amount);
+        const paymentInfo = await PaymentService.calculateAndSendPaymentPN532(portfolio.allTokens, this.pn532!, amount);
         const paymentTime = Date.now() - paymentStart;
         console.log(`⏱️ [PROFILE] Total payment processing time: ${paymentTime}ms`);
         
@@ -227,7 +282,6 @@ export class NFCService implements INFCService {
         
         const totalTransactionTime = Date.now() - transactionFlowStart;
         console.log(`⏱️ [PROFILE] COMPLETE TRANSACTION FLOW: ${totalTransactionTime}ms`);
-        console.log(`⏱️ [PROFILE] BREAKDOWN: Balance fetch: ${Date.now() - transactionFlowStart - paymentTime}ms, Payment: ${paymentTime}ms`);
         
         if (this.cardHandlerResolve) {
           this.cardHandlerResolve({ 
@@ -282,7 +336,6 @@ export class NFCService implements INFCService {
         // Mark the address processing as complete
         console.log(`🏁 Finishing processing for address: ${ethAddress} (successful: ${paymentSuccessful})`);
         
-        // No more cooldown - just finish processing for all cases
         if (ethAddress) {
           AddressProcessor.finishProcessing(ethAddress);
         }
@@ -297,83 +350,9 @@ export class NFCService implements INFCService {
   }
 
   /**
-   * Start the NFC service
-   */
-  public startListening(): void {
-    console.log('🟢 NFCService: Starting to listen for readers...');
-    console.log('📡 NFC Service is now listening for readers.');
-  }
-
-  /**
-   * Arm the service for payment and wait for a card tap
-   */
-  public async armForPaymentAndAwaitTap(amount: number): Promise<{ success: boolean; message: string; errorType?: string; paymentInfo?: any }> {
-    console.log(`🔧 DEBUG: Instance #${this.instanceId} - Arming payment service for $${amount.toFixed(2)}`);
-    
-    // Clean up any leftover state from previous sessions
-    if (this.paymentArmed || this.cardHandlerResolve || this.cardHandlerPromise) {
-      console.log(`⚠️ WARNING: Instance #${this.instanceId} - Found leftover payment state, cleaning up...`);
-      console.log(`🔍 Previous state - paymentArmed: ${this.paymentArmed}, cardHandlerResolve: ${!!this.cardHandlerResolve}, cardHandlerPromise: ${!!this.cardHandlerPromise}`);
-      this.disarmPayment();
-    }
-    
-    this.paymentArmed = true;
-    this.currentPaymentAmount = amount;
-    console.log(`💰 NFCService: Instance #${this.instanceId} - Armed for payment of $${amount.toFixed(2)}. Waiting for tap...`);
-    console.log(`🔍 DEBUG: Instance #${this.instanceId} - After arming - paymentArmed: ${this.paymentArmed}, amount: ${this.currentPaymentAmount}`);
-    
-    // Debug: Show current address processing state
-    AddressProcessor.debugState();
-    
-    // Create a promise that will be resolved when a card is processed
-    this.cardHandlerPromise = new Promise((resolve) => {
-      this.cardHandlerResolve = resolve;
-    });
-
-    // Set a timeout for the payment (30 seconds)
-    const timeoutId = setTimeout(() => {
-      console.log(`⏰ DEBUG: Payment timeout reached, disarming...`);
-      if (this.cardHandlerResolve) {
-        this.cardHandlerResolve({ success: false, message: 'Payment timeout', errorType: 'TIMEOUT' });
-        this.cardHandlerResolve = null;
-      }
-      this.disarmPayment();
-    }, 30000);
-
-    try {
-      const result = await this.cardHandlerPromise;
-      console.log(`🔧 DEBUG: Card handler promise resolved, clearing timeout and disarming`);
-      clearTimeout(timeoutId);
-      this.disarmPayment();
-      return result;
-    } catch (error) {
-      console.log(`🔧 DEBUG: Card handler promise error, clearing timeout and disarming`);
-      clearTimeout(timeoutId);
-      this.disarmPayment();
-      return { success: false, message: 'Payment processing error', errorType: 'PROCESSING_ERROR' };
-    }
-  }
-
-  /**
-   * Disarm the payment service
-   */
-  private disarmPayment(): void {
-    console.log(`🔧 DEBUG: Instance #${this.instanceId} - disarmPayment() called - was armed: ${this.paymentArmed}`);
-    this.paymentArmed = false;
-    this.currentPaymentAmount = null;
-    this.cardHandlerPromise = null;
-    this.cardHandlerResolve = null;
-    
-    // Clean up any stuck address processing states when disarming
-    // This is a safety measure to ensure addresses don't stay locked
-    console.log(`🧹 Instance #${this.instanceId} - Cleaning up any stuck address processing states...`);
-    AddressProcessor.clearAllProcessing();
-  }
-
-  /**
    * Process wallet address scan response
    */
-  private async processWalletScan(phoneResponse: string, reader: Reader): Promise<void> {
+  private async processWalletScan(phoneResponse: string): Promise<void> {
     let ethAddress: string | null = null;
     let chainId: number | undefined;
     
@@ -417,11 +396,75 @@ export class NFCService implements INFCService {
   }
 
   /**
+   * Start the NFC service
+   */
+  public startListening(): void {
+    console.log('🟢 PN532Service: Starting to listen for tags...');
+    console.log('📡 PN532 Service is now listening for NFC tags.');
+  }
+
+  /**
+   * Arm the service for payment and wait for a card tap
+   */
+  public async armForPaymentAndAwaitTap(amount: number): Promise<{ success: boolean; message: string; errorType?: string; paymentInfo?: any }> {
+    console.log(`🔧 DEBUG: Instance #${this.instanceId} - Arming payment service for $${amount.toFixed(2)}`);
+    
+    if (!this.isReady || !this.pn532) {
+      return { success: false, message: 'PN532 reader not ready', errorType: 'READER_NOT_READY' };
+    }
+    
+    // Clean up any leftover state from previous sessions
+    if (this.paymentArmed || this.cardHandlerResolve || this.cardHandlerPromise) {
+      console.log(`⚠️ WARNING: Instance #${this.instanceId} - Found leftover payment state, cleaning up...`);
+      this.disarmPayment();
+    }
+    
+    this.paymentArmed = true;
+    this.currentPaymentAmount = amount;
+    console.log(`💰 PN532Service: Instance #${this.instanceId} - Armed for payment of $${amount.toFixed(2)}. Waiting for tap...`);
+    
+    // Debug: Show current address processing state
+    AddressProcessor.debugState();
+    
+    // Create a promise that will be resolved when a tag is processed
+    this.cardHandlerPromise = new Promise((resolve) => {
+      this.cardHandlerResolve = resolve;
+    });
+
+    // Set a timeout for the payment (30 seconds)
+    const timeoutId = setTimeout(() => {
+      console.log(`⏰ DEBUG: Payment timeout reached, disarming...`);
+      if (this.cardHandlerResolve) {
+        this.cardHandlerResolve({ success: false, message: 'Payment timeout', errorType: 'TIMEOUT' });
+        this.cardHandlerResolve = null;
+      }
+      this.disarmPayment();
+    }, 30000);
+
+    try {
+      const result = await this.cardHandlerPromise;
+      console.log(`🔧 DEBUG: Card handler promise resolved, clearing timeout and disarming`);
+      clearTimeout(timeoutId);
+      this.disarmPayment();
+      return result;
+    } catch (error) {
+      console.log(`🔧 DEBUG: Card handler promise error, clearing timeout and disarming`);
+      clearTimeout(timeoutId);
+      this.disarmPayment();
+      return { success: false, message: 'Payment processing error', errorType: 'PROCESSING_ERROR' };
+    }
+  }
+
+  /**
    * Scan for wallet address (for transaction history filtering)
    */
   public async scanForWalletAddress(): Promise<{ success: boolean; message: string; address?: string; errorType?: string }> {
+    if (!this.isReady || !this.pn532) {
+      return { success: false, message: 'PN532 reader not ready', errorType: 'READER_NOT_READY' };
+    }
+
     this.walletScanArmed = true;
-    console.log('🔍 NFCService: Armed for wallet address scan. Waiting for tap...');
+    console.log('🔍 PN532Service: Armed for wallet address scan. Waiting for tap...');
     
     // Create a promise that will be resolved when a wallet is scanned
     this.walletScanPromise = new Promise((resolve) => {
@@ -450,20 +493,10 @@ export class NFCService implements INFCService {
   }
 
   /**
-   * Disarm the wallet scan service
-   */
-  private disarmWalletScan(): void {
-    this.walletScanArmed = false;
-    this.walletScanPromise = null;
-    this.walletScanResolve = null;
-  }
-
-  /**
    * Cancel any ongoing operations (payment or wallet scan)
    */
   public cancelCurrentOperation(): void {
-    console.log('🚫 Cancelling current NFC operation...');
-    console.log(`🔧 DEBUG: cancelCurrentOperation() - paymentArmed: ${this.paymentArmed}, walletScanArmed: ${this.walletScanArmed}`);
+    console.log('🚫 Cancelling current PN532 operation...');
     
     // Cancel payment operation if active
     if (this.paymentArmed && this.cardHandlerResolve) {
@@ -492,14 +525,52 @@ export class NFCService implements INFCService {
     // Clean up any stuck address processing states
     AddressProcessor.clearAllProcessing();
     
-    console.log('✅ NFC operation cancelled successfully');
+    console.log('✅ PN532 operation cancelled successfully');
   }
 
   /**
    * Stop the NFC service
    */
   public stopListening(): void {
-    console.log('🔴 NFCService: Stopping listeners...');
-    // Add any cleanup logic here if needed
+    console.log('🔴 PN532Service: Stopping listeners...');
+    
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = null;
+    }
+    
+    if (this.serialPort && this.serialPort.isOpen) {
+      this.serialPort.close((err) => {
+        if (err) {
+          console.error('Error closing serial port:', err);
+        } else {
+          console.log('Serial port closed successfully');
+        }
+      });
+    }
+  }
+
+  /**
+   * Disarm the payment service
+   */
+  private disarmPayment(): void {
+    console.log(`🔧 DEBUG: Instance #${this.instanceId} - disarmPayment() called - was armed: ${this.paymentArmed}`);
+    this.paymentArmed = false;
+    this.currentPaymentAmount = null;
+    this.cardHandlerPromise = null;
+    this.cardHandlerResolve = null;
+    
+    // Clean up any stuck address processing states when disarming
+    console.log(`🧹 Instance #${this.instanceId} - Cleaning up any stuck address processing states...`);
+    AddressProcessor.clearAllProcessing();
+  }
+
+  /**
+   * Disarm the wallet scan service
+   */
+  private disarmWalletScan(): void {
+    this.walletScanArmed = false;
+    this.walletScanPromise = null;
+    this.walletScanResolve = null;
   }
 }

@@ -3,6 +3,20 @@ dotenv.config();
 
 export const AID = 'F046524545504159'; // F0 + FREEPAY in HEX format
 
+// NFC Reader Configuration
+export type NFCReaderType = 'ACR1252U' | 'PN532';
+
+export const NFC_READER_TYPE: NFCReaderType = (process.env.NFC_READER_TYPE as NFCReaderType) || 'ACR1252U';
+
+// PN532 Configuration (only used if NFC_READER_TYPE is 'PN532')
+export const PN532_SERIAL_PORT = process.env.PN532_SERIAL_PORT || '/dev/ttyUSB0';
+export const PN532_BAUD_RATE = parseInt(process.env.PN532_BAUD_RATE || '115200');
+export const PN532_CONNECTION_TYPE = process.env.PN532_CONNECTION_TYPE || 'UART'; // UART or I2C
+
+// I2C Configuration (only used if PN532_CONNECTION_TYPE is 'I2C')
+export const PN532_I2C_BUS = parseInt(process.env.PN532_I2C_BUS || '1'); // I2C bus number (usually 1 on Raspberry Pi)
+export const PN532_I2C_ADDRESS = parseInt(process.env.PN532_I2C_ADDRESS || '0x24', 16); // PN532 I2C address (0x24 is default)
+
 // Validate required environment variables
 if (!process.env.MERCHANT_ADDRESS) {
   throw new Error('MERCHANT_ADDRESS environment variable is required. Please set it in your .env file.');

@@ -120,7 +120,9 @@ This NFC payment terminal can be deployed as a **plug-and-play kiosk** on Raspbe
 ### **Hardware Requirements**
 - Raspberry Pi 4B (4GB+ RAM recommended)
 - 7" Official Raspberry Pi Touchscreen 
-- **ACR1252U-M1 NFC Reader** (specifically supported)
+- **NFC Reader** (multiple options supported):
+  - **ACR1252U-M1 NFC Reader** (original, plug-and-play)
+  - **HiLetgo PN532 NFC Module** (cost-effective alternative)
 - 32GB+ MicroSD card
 
 ### **Deployment Features**
@@ -143,6 +145,32 @@ cp build-config.env.template build-config.env
 ./build-pi-image-osx.sh
 
 # Flash the generated nfc-terminal-<date>.img.gz file to SD card using Raspberry Pi Imager and boot!
+```
+
+## 🔧 NFC Reader Support
+
+This terminal supports multiple NFC reader types:
+
+### **ACR1252U-M1 (Original)**
+- Plug-and-play USB connection
+- No additional setup required
+- Higher cost (~$50-80)
+
+### **PN532 Module (Cost-Effective Alternative)**
+- Significantly cheaper (~$10-15)
+- Requires basic wiring setup
+- Supports UART and I2C connections
+- **📋 [PN532 Setup Guide](PN532-SETUP.md)**
+
+### **Configuration**
+Set your NFC reader type in `.env`:
+```env
+# For PN532 module
+NFC_READER_TYPE=PN532
+PN532_SERIAL_PORT=/dev/ttyUSB0
+
+# For ACR1252U (default)
+NFC_READER_TYPE=ACR1252U
 ```
 
 📖 **[Complete Deployment Guide](README-DEPLOYMENT.md)**

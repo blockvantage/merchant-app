@@ -1,15 +1,16 @@
-import { NFCService } from './services/nfcService.js';
+import { INFCService } from './interfaces/INFCService.js';
+import { NFCFactory } from './services/nfcFactory.js';
 import { PriceCacheService } from './services/priceCacheService.js';
 
 /**
  * Main application orchestrator
  */
 export class App {
-  private nfcService: NFCService;
+  private nfcService: INFCService;
 
   constructor() {
     // Initialize services that don't depend on dynamic data from server
-    this.nfcService = new NFCService(); 
+    this.nfcService = NFCFactory.createNFCService(); 
 }
 
   /**

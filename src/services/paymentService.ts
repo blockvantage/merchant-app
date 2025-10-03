@@ -1,4 +1,6 @@
 import { Reader } from 'nfc-pcsc';
+import { PN532 } from 'pn532';
+import * as ndef from 'ndef';
 import { MERCHANT_ADDRESS, SUPPORTED_CHAINS } from '../config/index.js';
 import { TokenWithPrice } from '../types/index.js';
 import { EthereumService } from './ethereumService.js';
@@ -135,6 +137,181 @@ export class PaymentService {
       // Re-throw other errors as-is
       throw error;
     }
+  }
+
+  /**
+   * Send payment request via PN532 using NDEF formatting
+   */
+  static async sendPaymentRequestPN532(pn532: PN532, amount: bigint, tokenAddress: string, decimals: number, chainId: number): Promise<void> {
+    try {
+      const eip681Uri = this.generateEIP681Uri(amount, tokenAddress, chainId);
+      
+      const chainName = this.getChainName(chainId);
+      console.log(`\n💳 Sending EIP-681 payment request for ${chainName} (Chain ID: ${chainId}):`);
+      console.log(`📄 URI: ${eip681Uri}`);
+      
+      // Create NDEF message with URI record
+      const uriRecord = ndef.uriRecord(eip681Uri);
+      const ndefMessage = ndef.encodeMessage([uriRecord]);
+      
+      console.log(`📡 NDEF Message (${ndefMessage.length} bytes)`);
+      
+      // Write NDEF message to tag
+      await pn532.writeNdefData(ndefMessage);
+      
+      console.log(`✅ NDEF payment request sent successfully for ${chainName}!`);
+      console.log('📱 Wallet app should now open with transaction details...');
+      
+    } catch (error: any) {
+      console.error('Error sending PN532 payment request:', error);
+      
+      // Check for specific PN532 errors that indicate phone moved too quickly
+      if (error.message?.includes('timeout') || 
+          error.message?.includes('Timeout') ||
+          error.message?.includes('No response')) {
+        console.log('📱💨 Phone moved too quickly during payment request transmission');
+        throw new Error('PHONE_MOVED_TOO_QUICKLY');
+      }
+      
+      // Re-throw other errors as-is
+      throw error;
+    }
+  }
+
+  /**
+   * Calculate payment options and send payment request (PN532 version)
+   */
+  static async calculateAndSendPaymentPN532(tokensWithPrices: TokenWithPrice[], pn532: PN532, targetUSD: number): Promise<PaymentResult> {
+    const startTime = Date.now();
+    console.log(`⏱️ [PROFILE] Starting calculateAndSendPaymentPN532 for $${targetUSD} with ${tokensWithPrices.length} tokens`);
+    
+    // Filter tokens that have sufficient balance for targetUSD payment
+    const viableTokens = tokensWithPrices.filter(token => 
+      token.priceUSD > 0 && token.valueUSD >= targetUSD
+    );
+
+    if (viableTokens.length === 0) {
+      console.log(`\n❌ No tokens found with sufficient balance for $${targetUSD} payment`);
+      throw new Error(`Customer doesn't have enough funds`);
+    }
+
+    console.log(`\n💰 PAYMENT OPTIONS ($${targetUSD}):`);
+    console.log(`🎯 Priority Order: L2 Stablecoin > L2 Other > L2 ETH > L1 Stablecoin > L1 Other > L1 ETH\n`);
+    
+    // Smart payment selection: prefer L2 stablecoins, then follow priority order
+    const selectedToken = this.selectBestPaymentToken(viableTokens);
+    const selectionTime = Date.now() - startTime;
+    console.log(`⏱️ [PROFILE] Token selection and analysis completed in ${selectionTime}ms`);
+    
+    // Calculate exact amount in smallest units using BigInt arithmetic
+    const targetUSDCents = Math.round(targetUSD * 1e8); // Convert to 8 decimal precision
+    const priceUSDCents = Math.round(selectedToken.priceUSD * 1e8);
+    const requiredAmount = (BigInt(targetUSDCents) * BigInt(10 ** selectedToken.decimals)) / BigInt(priceUSDCents);
+    
+    // Convert to display format
+    const displayAmount = Number(requiredAmount) / Math.pow(10, selectedToken.decimals);
+    
+    console.log(`\n🎯 SELECTED PAYMENT:`);
+    console.log(`💰 Merchant amount: $${targetUSD.toFixed(2)} USD`);
+    console.log(`💳 Token: ${selectedToken.symbol}`);
+    console.log(`🔢 Token amount: ${displayAmount} ${selectedToken.symbol}`);
+    console.log(`📊 Exact amount: ${requiredAmount.toString()} smallest units`);
+    console.log(`⛓️  Chain: ${selectedToken.chainDisplayName} (Chain ID: ${selectedToken.chainId})`);
+    console.log(`💵 Price: $${selectedToken.priceUSD.toFixed(4)} per ${selectedToken.symbol}`);
+    
+    // Check if merchant supports this chain
+    const isMerchantChain = BridgeManager.isMerchantSupportedChain(selectedToken.chainId);
+    
+    if (!isMerchantChain) {
+      console.log(`\n🔄 Chain ${selectedToken.chainDisplayName} not supported by merchant, checking bridge routes...`);
+      
+      // Find a bridge route
+      const routeResult = await BridgeManager.findBestRoute(selectedToken.chainId, selectedToken.symbol);
+      
+      if (!routeResult) {
+        throw new Error(`Payment not possible: ${selectedToken.symbol} on ${selectedToken.chainDisplayName} cannot be routed to merchant chains`);
+      }
+      
+      console.log(`✅ Found route via ${routeResult.provider.name} to ${routeResult.route.destinationNetwork}`);
+      
+      // Create the bridge swap
+      const swapResult = await BridgeManager.createSwap(routeResult.provider, routeResult.route, displayAmount);
+      
+      if (!swapResult) {
+        throw new Error(`Failed to create cross-chain payment route via ${routeResult.provider.name}`);
+      }
+      
+      console.log(`\n💱 CROSS-CHAIN PAYMENT via ${swapResult.bridgeName}:`);
+      console.log(`🔄 Swap ID: ${swapResult.swapId}`);
+      console.log(`📍 Send ${displayAmount} ${selectedToken.symbol} to: ${swapResult.depositAddress}`);
+      console.log(`🎯 Merchant will receive on: ${routeResult.route.destinationNetwork}`);
+      
+      // For bridge payments, we send to the bridge deposit address
+      const swapAmount = BigInt(Math.round(swapResult.depositAmount * Math.pow(10, selectedToken.decimals)));
+      
+      // Create custom EIP-681 URI for bridge payment
+      let paymentUri: string;
+      if (EthereumService.isEthAddress(selectedToken.address)) {
+        // ETH payment
+        paymentUri = `ethereum:${swapResult.depositAddress}@${selectedToken.chainId}?value=${swapAmount.toString()}`;
+      } else {
+        // ERC-20 token payment
+        paymentUri = `ethereum:${selectedToken.address}@${selectedToken.chainId}/transfer?address=${swapResult.depositAddress}&uint256=${swapAmount.toString()}`;
+      }
+      
+      console.log(`\n💳 Sending ${swapResult.bridgeName} payment request:`);
+      console.log(`📄 URI: ${paymentUri}`);
+      
+      const nfcTransmissionStart = Date.now();
+      
+      // Create NDEF message with URI record for PN532
+      const uriRecord = ndef.uriRecord(paymentUri);
+      const ndefMessage = ndef.encodeMessage([uriRecord]);
+      await pn532.writeNdefData(ndefMessage);
+      
+      const nfcTransmissionTime = Date.now() - nfcTransmissionStart;
+      
+      console.log(`⏱️ [PROFILE] PN532 payment request transmission completed in ${nfcTransmissionTime}ms`);
+      console.log(`✅ ${swapResult.bridgeName} payment request sent`);
+      console.log(`📱 Customer will pay to ${swapResult.bridgeName}, merchant receives on ${routeResult.route.destinationNetwork}`);
+      
+      const totalTime = Date.now() - startTime;
+      console.log(`⏱️ [PROFILE] calculateAndSendPaymentPN532 (with bridge) completed in ${totalTime}ms`);
+      
+      // Return information needed for monitoring bridge payment
+      return {
+        selectedToken,
+        requiredAmount: swapAmount,
+        chainId: selectedToken.chainId,
+        chainName: selectedToken.chainDisplayName,
+        isLayerswap: swapResult.bridgeName === 'Layerswap', // For backward compatibility
+        layerswapDepositAddress: swapResult.depositAddress,
+        layerswapSwapId: swapResult.swapId
+      };
+    }
+    
+    // Normal payment flow (merchant supports the chain)
+    console.log(`🔍 Payment will be monitored on: ${selectedToken.chainDisplayName}`);
+    
+    // Send payment request using the exact amount
+    const nfcTransmissionStart = Date.now();
+    await this.sendPaymentRequestPN532(pn532, requiredAmount, selectedToken.address, selectedToken.decimals, selectedToken.chainId);
+    const nfcTransmissionTime = Date.now() - nfcTransmissionStart;
+    console.log(`⏱️ [PROFILE] PN532 payment request transmission completed in ${nfcTransmissionTime}ms`);
+    
+    console.log(`✅ Payment request sent for exactly ${requiredAmount.toString()} smallest units`);
+    console.log(`📱 Customer will be asked to pay ${displayAmount} ${selectedToken.symbol}`);
+    
+    const totalTime = Date.now() - startTime;
+    console.log(`⏱️ [PROFILE] calculateAndSendPaymentPN532 completed in ${totalTime}ms`);
+    
+    // Return information needed for monitoring
+    return {
+      selectedToken,
+      requiredAmount, // BigInt amount in smallest units
+      chainId: selectedToken.chainId,
+      chainName: selectedToken.chainDisplayName
+    };
   }
 
   /**
