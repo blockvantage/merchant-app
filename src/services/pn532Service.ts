@@ -58,8 +58,34 @@ export class PN532Service implements INFCService {
         this.i2cBus = openSync(this.i2cBusNumber);
         console.log(`✅ I2C bus ${this.i2cBusNumber} opened successfully`);
         
-        // Create PN532 instance with I2C bus
-        this.pn532 = new pn532.PN532(this.i2cBus);
+        // Create a wrapper that mimics the interface the PN532 library expects
+        const i2cWrapper = {
+          write: (data: Buffer, callback: (err: any) => void) => {
+            try {
+              // Write data to PN532 I2C address
+              for (let i = 0; i < data.length; i++) {
+                this.i2cBus!.writeByteSync(this.i2cAddress, i, data[i]);
+              }
+              callback(null);
+            } catch (err) {
+              callback(err);
+            }
+          },
+          read: (length: number, callback: (err: any, data?: Buffer) => void) => {
+            try {
+              const buffer = Buffer.alloc(length);
+              for (let i = 0; i < length; i++) {
+                buffer[i] = this.i2cBus!.readByteSync(this.i2cAddress, i);
+              }
+              callback(null, buffer);
+            } catch (err) {
+              callback(err);
+            }
+          }
+        };
+        
+        // Create PN532 instance with I2C wrapper
+        this.pn532 = new pn532.PN532(i2cWrapper);
         
       } else {
         console.log(`🔧 DEBUG: Instance #${this.instanceId} - Initializing PN532 over UART on ${this.serialPortPath}`);

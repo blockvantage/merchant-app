@@ -74,6 +74,8 @@ declare module 'i2c-bus' {
   export interface I2CBus {
     readByte(address: number, register: number, callback: (err: Error | null, data: number) => void): void;
     writeByte(address: number, register: number, byte: number, callback: (err: Error | null) => void): void;
+    readByteSync(address: number, register: number): number;
+    writeByteSync(address: number, register: number, byte: number): void;
     close(callback: (err: Error | null) => void): void;
   }
   
