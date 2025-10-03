@@ -1,6 +1,6 @@
 import * as pn532 from 'pn532';
 import { SerialPort } from 'serialport';
-import * as i2c from 'i2c';
+import { openSync } from 'i2c-bus';
 import * as ndef from 'ndef';
 import { INFCService } from '../interfaces/INFCService.js';
 import { EthereumService } from './ethereumService.js';
@@ -16,7 +16,7 @@ import { broadcast } from '../server.js';
 export class PN532Service implements INFCService {
   private pn532: any | null = null;
   private serialPort: SerialPort | null = null;
-  private i2cWire: any | null = null;
+  private i2cBus: any | null = null;
   private paymentArmed: boolean = false;
   private walletScanArmed: boolean = false;
   private currentPaymentAmount: number | null = null;
@@ -54,12 +54,12 @@ export class PN532Service implements INFCService {
       if (this.connectionType.toLowerCase() === 'i2c') {
         console.log(`🔧 DEBUG: Instance #${this.instanceId} - Initializing PN532 over I2C (bus: ${this.i2cBusNumber}, address: 0x${this.i2cAddress.toString(16)})`);
         
-        // Create I2C wire using node-i2c (as per pn532 README)
-        this.i2cWire = new i2c(pn532.I2C_ADDRESS, {device: `/dev/i2c-${this.i2cBusNumber}`});
-        console.log(`✅ I2C wire created for bus ${this.i2cBusNumber} at address 0x${this.i2cAddress.toString(16)}`);
+        // Create I2C bus using i2c-bus
+        this.i2cBus = openSync(this.i2cBusNumber);
+        console.log(`✅ I2C bus ${this.i2cBusNumber} opened successfully`);
         
-        // Create PN532 instance with I2C wire
-        this.pn532 = new pn532.PN532(this.i2cWire);
+        // Create PN532 instance with I2C bus
+        this.pn532 = new pn532.PN532(this.i2cBus);
         
       } else {
         console.log(`🔧 DEBUG: Instance #${this.instanceId} - Initializing PN532 over UART on ${this.serialPortPath}`);

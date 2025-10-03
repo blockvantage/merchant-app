@@ -54,11 +54,6 @@ declare module 'pn532' {
   export const I2C_ADDRESS: number;
 }
 
-declare module 'i2c' {
-  export = i2c;
-  
-  function i2c(address: number, options: { device: string }): any;
-}
 
 declare module 'ndef' {
   export interface NDEFRecord {
