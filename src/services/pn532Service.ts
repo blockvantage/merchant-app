@@ -1,4 +1,4 @@
-import { PN532 } from 'pn532';
+import { PN532 } from 'node-pn532';
 import { SerialPort } from 'serialport';
 import { openSync } from 'i2c-bus';
 import * as ndef from 'ndef';

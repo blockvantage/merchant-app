@@ -35,7 +35,7 @@ declare module 'nfc-pcsc' {
   }
 }
 
-declare module 'pn532' {
+declare module 'node-pn532' {
   import { EventEmitter } from 'events';
   
   export class PN532 extends EventEmitter {
