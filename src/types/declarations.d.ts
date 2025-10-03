@@ -39,7 +39,7 @@ declare module 'pn532' {
   import { EventEmitter } from 'events';
   
   export class PN532 extends EventEmitter {
-    constructor(serialPort: any);
+    constructor(serialPort: any, options?: { address?: number });
     
     on(event: 'ready', listener: () => void): this;
     on(event: 'error', listener: (error: Error) => void): this;
