@@ -1,6 +1,6 @@
 import { Reader } from 'nfc-pcsc';
 import { PN532 } from 'pn532';
-import * as ndef from 'ndef';
+import ndef from 'ndef';
 import { MERCHANT_ADDRESS, SUPPORTED_CHAINS } from '../config/index.js';
 import { TokenWithPrice } from '../types/index.js';
 import { EthereumService } from './ethereumService.js';

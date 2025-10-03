@@ -1,7 +1,7 @@
 import * as pn532 from 'pn532';
 import { SerialPort } from 'serialport';
 import { openSync } from 'i2c-bus';
-import * as ndef from 'ndef';
+import ndef from 'ndef';
 import { INFCService } from '../interfaces/INFCService.js';
 import { EthereumService } from './ethereumService.js';
 import { AddressProcessor } from './addressProcessor.js';
