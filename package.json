@@ -4,7 +4,7 @@
   "type": "module",
   "main": "dist/app.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp -r src/web dist/",
     "clean": "rm -rf dist",
     "prestart": "npm run clean && npm run build",
     "start:backend": "node dist/server.js",
