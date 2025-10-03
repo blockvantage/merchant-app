@@ -33,22 +33,31 @@ declare module 'nfc-pcsc' {
     standard: string;
     uid: string;
   }
-}
 
-declare module 'node-pn532' {
+declare module 'pn532' {
   import { EventEmitter } from 'events';
   
   export class PN532 extends EventEmitter {
-    constructor(serialPort: any, options?: { address?: number });
+    constructor(serialPortOrI2C: any);
     
     on(event: 'ready', listener: () => void): this;
     on(event: 'error', listener: (error: Error) => void): this;
+    on(event: 'tag', listener: (tag: any) => void): this;
     on(event: string, listener: (...args: any[]) => void): this;
     
     getFirmwareVersion(): Promise<any>;
     scanTag(): Promise<any>;
     writeNdefData(data: Buffer): Promise<void>;
+    readNdefData(): Promise<Buffer>;
   }
+  
+  export const I2C_ADDRESS: number;
+}
+
+declare module 'i2c' {
+  export = i2c;
+  
+  function i2c(address: number, options: { device: string }): any;
 }
 
 declare module 'ndef' {
